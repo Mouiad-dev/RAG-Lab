@@ -30,15 +30,20 @@ llm:
 # at ingest-time AND query-time or the points live on different maps (Step 6).
 embeddings:
   provider: bge_m3            # bge_m3 | multilingual_e5 | (openai only if ever needed)
-  dimension: 1024             # BGE-M3 output size; the pgvector column must match this
+  provider_model: "bge-m3"    # the Ollama model tag pulled into the ollama box
+  dimension: 1024             # BGE-M3 output size; the pgvector column MUST match this
   normalize: true             # unit-length vectors so cosine similarity behaves
 
 # ---- Ingestion (Phase A, runs ONCE): how docs become searchable ---------------
 ingestion:
-  extractor: docling_pdf      # docling_pdf (structure-aware) | image_page (multimodal, later)
+  # NOTE: extraction is now AUTO-ROUTED per document (text-layer probe), so there's
+  # no single 'extractor' switch — the router picks text_pdf vs image_ocr by what
+  # each file actually is. ColPali will slot in as a second image strategy later.
   chunker: structure_aware    # structure_aware (never cut a table!) | naive (fixed-size, baseline)
-  chunk_size: 800             # tokens per chunk (tune later against evals)
+  chunk_size: 800             # chars per chunk (tune later against evals)
   chunk_overlap: 100          # small overlap so ideas aren't sliced at the seam
+  ocr_languages: "eng"        # tesseract langs for the image path; use "eng+ara" for the manga
+                              # (requires the tesseract Arabic language pack in the app box)
 
 # ---- Retrieval (Phase B, runs EVERY question): the swappable strategies --------
 # THIS is the dial you'll turn most. Rollout order (cheap+broad -> expensive+specific):
