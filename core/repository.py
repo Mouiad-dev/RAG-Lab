@@ -99,3 +99,33 @@ class DocumentRepository:
             )
         self.conn.commit()
         return StoredDocument(document_id=document_id, chunk_count=len(chunks))
+
+    # ---- read path: vector similarity search --------------------------------
+    def search_by_vector(
+        self, query_vector: list[float], top_k: int
+    ) -> list[tuple[str, str, int, int, float]]:
+        """Return the top_k nearest chunks to query_vector by cosine distance.
+
+        Returns rows of (text, source_filename, page_number, chunk_index, score)
+        where score = 1 - cosine_distance, so HIGHER = more relevant (easier to
+        reason about than raw distance). '<=>' is pgvector's cosine-distance op.
+
+        The HNSW index on embedding makes this fast on large tables; without it
+        this would scan every row.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT c.text,
+                       d.source_filename,
+                       c.page_number,
+                       c.chunk_index,
+                       1 - (c.embedding <=> %s::vector) AS score
+                FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                ORDER BY c.embedding <=> %s::vector
+                LIMIT %s;
+                """,
+                (_vec_literal(query_vector), _vec_literal(query_vector), top_k),
+            )
+            return cur.fetchall()
