@@ -129,3 +129,43 @@ class DocumentRepository:
                 (_vec_literal(query_vector), _vec_literal(query_vector), top_k),
             )
             return cur.fetchall()
+
+    # ---- read path: keyword search (built-in full-text; BM25 later) ----------
+    def search_by_keyword(
+        self, query_text: str, top_k: int
+    ) -> list[tuple[str, str, int, int, float]]:
+        """Return the top_k chunks by KEYWORD relevance, using Postgres built-in
+        full-text search (tsvector + ts_rank_cd).
+
+        WHY built-in and not BM25: true BM25 needs an extension (pg_textsearch /
+        ParadeDB) not present in the base pgvector image. Built-in FTS works in ANY
+        Postgres with zero setup, so the hybrid strategy is runnable today. BM25 is
+        a drop-in upgrade behind this same method IF an eval proves it's worth it
+        (cheap-and-broad first). ts_rank_cd considers term proximity/density.
+
+        'simple' config = language-agnostic tokenizer: works for BOTH Arabic and
+        English (no stemming, but exact-term matching — which is the whole point of
+        the keyword leg: catch literal terms like 'JWT' or 'البند'). websearch_to_
+        tsquery parses human queries safely (quotes, OR, -exclude).
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT c.text,
+                       d.source_filename,
+                       c.page_number,
+                       c.chunk_index,
+                       ts_rank_cd(
+                           to_tsvector('simple', c.text),
+                           websearch_to_tsquery('simple', %s)
+                       ) AS score
+                FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                WHERE to_tsvector('simple', c.text)
+                      @@ websearch_to_tsquery('simple', %s)
+                ORDER BY score DESC
+                LIMIT %s;
+                """,
+                (query_text, query_text, top_k),
+            )
+            return cur.fetchall()
