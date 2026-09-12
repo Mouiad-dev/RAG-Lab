@@ -1,122 +1,70 @@
 """
-ingestion/service.py  —  the ROUTER + orchestrator (the receptionist).
+ingestion/types.py  —  the SHARED SHAPES of the ingestion pipeline.
 
-This is the piece our file-profiling PROVED we need. Three uploads, three
-different extraction realities:
-    Docker slides   -> real text layer      -> TEXT extractor
-    RAG cheat sheet -> 0 chars, image-only  -> IMAGE (OCR) extractor
-    manga PNG       -> image file           -> IMAGE (OCR) extractor
+Three plain data containers that every ingestion piece agrees on:
 
-The router looks at each document and picks the strategy automatically, using the
-exact probe we ran by hand (does pdftotext yield real text?). Then it chunks with
-whichever chunker config/rag.yaml selected.
+    ExtractedPage  -> one page of text after extraction (number + text)
+    ExtractedDoc   -> a whole file after extraction (metadata + list of pages)
+    Chunk          -> one retrievable piece of a doc (+ its embedding, filled later)
 
-Design:
-  - The router is the ONLY place that constructs extractors/chunkers. Everything
-    else depends on the abstract types. Add ColPali later = add one branch here +
-    one new extractor file; nothing downstream changes. (Open/Closed.)
-  - Selection is driven by config, not hardcoded, so the lab can flip strategies.
+WHY this file has NO imports from the rest of ingestion: everything else
+(extractors, chunkers, service, repository) depends on THESE types, so if this
+file imported them back we'd get a circular import. Types sit at the bottom of
+the dependency graph and depend on nothing. Keep it that way.
+
+The uniform shape is the whole point of the Strategy pattern here: any extractor
+returns an ExtractedDoc, any chunker consumes one and returns list[Chunk], so
+you can swap strategies without touching the pieces on either side.
 """
 
 from __future__ import annotations
 
-import subprocess
-from dataclasses import dataclass
-from pathlib import Path
-
-from ingestion.chunkers.base import Chunker
-from ingestion.chunkers.naive import NaiveChunker
-from ingestion.chunkers.structure_aware import StructureAwareChunker
-from ingestion.extractors.base import Extractor
-from ingestion.extractors.image_ocr import ImageOcrExtractor
-from ingestion.extractors.text_pdf import TextPdfExtractor
-from ingestion.types import Chunk, ExtractedDoc
-
-IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
-# If a PDF yields fewer than this many non-whitespace chars, treat it as image-only.
-# Not zero, to tolerate a stray watermark character on an otherwise-scanned page.
-TEXT_LAYER_MIN_CHARS = 20
-
-
-def _pdf_has_text_layer(path: Path) -> bool:
-    """The automatic version of the probe we ran live: does this PDF contain
-    real, extractable text? Uses pdffonts (any fonts?) + a pdftotext sample."""
-    fonts = subprocess.run(
-        ["pdffonts", str(path)], capture_output=True, text=True, check=True
-    ).stdout.strip().splitlines()
-    # pdffonts prints 2 header lines even when empty; >2 lines means fonts exist.
-    has_fonts = len(fonts) > 2
-    if not has_fonts:
-        return False
-    sample = subprocess.run(
-        ["pdftotext", "-f", "1", "-l", "3", str(path), "-"],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    return len("".join(sample.split())) >= TEXT_LAYER_MIN_CHARS
+from dataclasses import dataclass, field
 
 
 @dataclass
-class IngestionConfig:
-    """The slice of config/rag.yaml this service cares about (ingestion.*)."""
-    chunker: str = "structure_aware"      # "structure_aware" | "naive"
-    chunk_size: int = 800
-    chunk_overlap: int = 100
-    ocr_languages: str = "eng"            # "eng+ara" once the manga needs Arabic
-
-    @classmethod
-    def from_yaml(cls, cfg: dict) -> "IngestionConfig":
-        ing = cfg.get("ingestion", {})
-        return cls(
-            chunker=ing.get("chunker", "structure_aware"),
-            chunk_size=ing.get("chunk_size", 800),
-            chunk_overlap=ing.get("chunk_overlap", 100),
-            ocr_languages=ing.get("ocr_languages", "eng"),
-        )
+class ExtractedPage:
+    """One page after extraction. page_number is 1-based (matches how humans cite)."""
+    page_number: int
+    text: str
 
 
 @dataclass
-class IngestionResult:
-    doc: ExtractedDoc
-    chunks: list[Chunk]
+class ExtractedDoc:
+    """A whole file after extraction: the uniform shape every extractor returns.
+
+    doc_type / extractor_name form an audit trail ("which strategy produced this?"),
+    which is why the schema stores them — you can later ask "how do OCR'd docs score
+    vs text-layer docs?" without re-running ingestion.
+    """
+    source_filename: str
+    doc_type: str                       # text_pdf | image_pdf | image
+    extractor_name: str                 # e.g. "text_pdf(docling)" — audit trail
+    pages: list[ExtractedPage] = field(default_factory=list)
 
     @property
-    def summary(self) -> str:
-        return (
-            f"{self.doc.source_filename}: routed->{self.doc.extractor_name}, "
-            f"{len(self.doc.pages)} page(s), {self.doc.total_chars} chars, "
-            f"{len(self.chunks)} chunk(s)"
-        )
+    def total_chars(self) -> int:
+        """Total non-structural character count across all pages (for logging/summary)."""
+        return sum(len(p.text) for p in self.pages)
+
+    @property
+    def page_count(self) -> int:
+        """How many pages actually yielded text (empty pages are dropped upstream)."""
+        return len(self.pages)
 
 
-class IngestionService:
-    """Profiles a file, routes to the right extractor, then chunks it."""
+@dataclass
+class Chunk:
+    """One retrievable piece of a document.
 
-    def __init__(self, config: IngestionConfig) -> None:
-        self.config = config
-
-    # ---- routing: pick the extractor based on what the file ACTUALLY is ------
-    def _select_extractor(self, path: Path) -> Extractor:
-        suffix = path.suffix.lower()
-        if suffix in IMAGE_SUFFIXES:
-            return ImageOcrExtractor(languages=self.config.ocr_languages)
-        if suffix == ".pdf":
-            if _pdf_has_text_layer(path):
-                return TextPdfExtractor()
-            return ImageOcrExtractor(languages=self.config.ocr_languages)  # image-only PDF
-        raise ValueError(f"unsupported file type: {suffix}")
-
-    # ---- chunker selection: driven by config, not hardcoded -----------------
-    def _select_chunker(self) -> Chunker:
-        if self.config.chunker == "naive":
-            return NaiveChunker(self.config.chunk_size, self.config.chunk_overlap)
-        if self.config.chunker == "structure_aware":
-            return StructureAwareChunker(self.config.chunk_size, self.config.chunk_overlap)
-        raise ValueError(f"unknown chunker: {self.config.chunker}")
-
-    # ---- the public entry point ---------------------------------------------
-    def ingest(self, path: Path) -> IngestionResult:
-        extractor = self._select_extractor(path)
-        doc = extractor.extract(path)
-        chunker = self._select_chunker()
-        chunks = chunker.chunk(doc)
-        return IngestionResult(doc=doc, chunks=chunks)
+    MUTABLE on purpose: the chunker creates it WITHOUT an embedding, then the embed
+    step fills `.embedding` in place. The repository refuses to store a chunk whose
+    embedding is still None, so a skipped embed step fails loudly instead of writing
+    NULL vectors. Every chunk keeps source_filename + page_number so a citation can
+    survive all the way to the final grounded answer.
+    """
+    text: str
+    source_filename: str                # citation: which document
+    page_number: int                    # citation: which page ("per p.4")
+    chunk_index: int                    # position within the document (stable id)
+    embedding: list[float] | None = None  # filled by the embed step, before storing

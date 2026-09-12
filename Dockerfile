@@ -6,9 +6,20 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install only what the smoke test needs for now. We keep this tiny on purpose;
-# the real requirements.txt grows as we add Django, pgvector client, etc.
-RUN pip install --no-cache-dir "psycopg[binary]==3.2.3" "httpx==0.27.2" "pyyaml==6.0.2"
+# External CLI tools the ingestion path shells out to (NOT pip packages):
+#   tesseract-ocr + tesseract-ocr-ara -> OCR for image PDFs / manga (eng+ara)
+#   poppler-utils                     -> pdftotext / pdftoppm (text-PDF fallback)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        tesseract-ocr tesseract-ocr-ara poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python deps from the manifest (single source of truth). Copy just the file
+# first so this layer is cached and only reruns when requirements change.
+# docling (requirements-ingest.txt) is intentionally NOT installed here — it's
+# heavy and ingest-only; text_pdf falls back to the pdftotext CLI above.
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /app
 

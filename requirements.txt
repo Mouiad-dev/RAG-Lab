@@ -1,0 +1,25 @@
+# =============================================================================
+# requirements.txt  —  the core dependencies EVERY run needs (web, retrieval,
+# generation, evals). Kept deliberately small; heavy ingest-only ML deps live in
+# requirements-ingest.txt so they don't bloat the image or a plain dev install.
+#
+# Install:  pip install -r requirements.txt
+#
+# External CLI tools (NOT pip): tesseract-ocr + poppler-utils for the OCR/PDF
+# path — those are apt-installed in the Dockerfile, called via subprocess.
+# =============================================================================
+
+# --- web layer (the control-panel UI + chat) ---
+Django>=5.2,<5.3          # 5.2 LTS; range-pinned (patch floats within the LTS line)
+
+# --- storage: pgvector via raw SQL through psycopg 3 ---
+# Range-pinned (not ==3.2.3): the 3.2.3 binary wheel has no build for newer
+# Python (e.g. 3.14 used in local dev), while Docker runs 3.12. This range
+# resolves on both. Stays within the stable 3.2/3.3 line.
+psycopg[binary]>=3.2.10,<3.4
+
+# --- LLM + embeddings talk HTTP to Ollama/Claude ---
+httpx==0.27.2
+
+# --- config/rag.yaml, the heart, is parsed with PyYAML ---
+PyYAML==6.0.2
