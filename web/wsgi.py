@@ -1,0 +1,15 @@
+"""
+web/wsgi.py — the WSGI entry point a production server (gunicorn/uwsgi) talks to.
+
+`runserver` uses this too. Points Django at web.settings and exposes `application`.
+"""
+
+from __future__ import annotations
+
+import os
+
+from django.core.wsgi import get_wsgi_application
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "web.settings")
+
+application = get_wsgi_application()

@@ -23,5 +23,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /app
 
-# On boot, run the smoke test. When Django arrives, this becomes runserver.
-CMD ["python", "boot_check.py"]
+EXPOSE 8000
+
+# On boot: ensure the pgvector tables exist (idempotent), then serve the Django
+# control panel. (boot_check.py stays available as a manual diagnostic:
+#   docker compose run --rm app python boot_check.py )
+CMD ["sh", "-c", "python -m core.apply_schema && python manage.py runserver 0.0.0.0:8000"]
