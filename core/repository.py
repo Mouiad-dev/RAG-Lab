@@ -15,6 +15,7 @@ vector as the string '[0.1,0.2,...]'.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import psycopg
@@ -25,6 +26,29 @@ from ingestion.types import Chunk
 def _vec_literal(vector: list[float]) -> str:
     """pgvector text input format: '[f1,f2,...]'. Compact, no spaces."""
     return "[" + ",".join(repr(float(x)) for x in vector) + "]"
+
+
+# Common EN + AR function words. In an OR keyword query these match almost every
+# chunk and drown the meaningful terms in noise (measured: they dragged hybrid
+# BELOW naive). The 'simple' FTS config does no stopword removal, so we do a small
+# one here. This is a poor-man's IDF: keep the rare, meaningful words; drop the
+# ones that carry no retrieval signal. A real BM25 leg would weight by IDF instead.
+_STOPWORDS = frozenset(
+    """
+    a an the this that these those of in on at to for from by with about as into
+    is are was were be been being do does did done can could should would will
+    what which who whom whose when where why how and or not no i you he she it we
+    they me my your his her its our their there here have has had my mine
+    من في على الى إلى عن مع هذا هذه ذلك التي الذي ما ماذا كيف اين أين متى لماذا
+    هل و او أو ثم كان كانت يكون هو هي هم انا أنا نحن انت أنت لا نعم قد الى عند
+    """.split()
+)
+
+
+def _keyword_terms(query_text: str) -> list[str]:
+    """Query -> the meaningful lexemes for an OR tsquery (stopwords + 1-char dropped)."""
+    words = re.findall(r"\w+", query_text.lower(), flags=re.UNICODE)
+    return [w for w in words if len(w) > 1 and w not in _STOPWORDS]
 
 
 @dataclass
@@ -145,9 +169,22 @@ class DocumentRepository:
 
         'simple' config = language-agnostic tokenizer: works for BOTH Arabic and
         English (no stemming, but exact-term matching — which is the whole point of
-        the keyword leg: catch literal terms like 'JWT' or 'البند'). websearch_to_
-        tsquery parses human queries safely (quotes, OR, -exclude).
+        the keyword leg: catch literal terms like 'JWT' or 'البند').
+
+        🔴 WHY NOT websearch_to_tsquery: it ANDs every word together, so a full
+        question ("What command removes a local image?") only matches a chunk that
+        contains ALL of those words at once — which, with no stemming, is almost
+        never true. Measured: it returned 0 rows for every golden question, making
+        hybrid silently collapse to pure dense. We OR the terms instead, so ANY
+        term can match and ts_rank_cd rewards chunks that hit MORE of them (and hit
+        them densely) — the behaviour a keyword leg is supposed to have.
         """
+        # Meaningful lexemes only (stopwords + 1-char tokens dropped), OR-ed so ANY
+        # term can match and ts_rank_cd rewards chunks hitting MORE of them densely.
+        terms = _keyword_terms(query_text)
+        if not terms:
+            return []
+        ts_or = " | ".join(terms)
         with self.conn.cursor() as cur:
             cur.execute(
                 """
@@ -157,15 +194,15 @@ class DocumentRepository:
                        c.chunk_index,
                        ts_rank_cd(
                            to_tsvector('simple', c.text),
-                           websearch_to_tsquery('simple', %s)
+                           to_tsquery('simple', %s)
                        ) AS score
                 FROM chunks c
                 JOIN documents d ON d.id = c.document_id
                 WHERE to_tsvector('simple', c.text)
-                      @@ websearch_to_tsquery('simple', %s)
+                      @@ to_tsquery('simple', %s)
                 ORDER BY score DESC
                 LIMIT %s;
                 """,
-                (query_text, query_text, top_k),
+                (ts_or, ts_or, top_k),
             )
             return cur.fetchall()
