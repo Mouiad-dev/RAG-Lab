@@ -21,3 +21,5 @@ uploads/
 # ingested documents (don't commit course/book files)
 data/*
 !data/.gitkeep
+/ai-learning.md
+/PROGRESS.md
