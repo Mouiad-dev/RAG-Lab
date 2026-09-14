@@ -1,0 +1,6 @@
+# RAG Lab — pinned dependencies.
+# Rule: a dependency is added the step it is first actually used, and pinned exactly.
+
+# --- Step 0.2: Django skeleton ---
+Django==5.2.17          # web framework (5.2 = LTS)
+psycopg[binary]==3.3.5  # PostgreSQL driver (needed from Phase 1 for pgvector DB)
