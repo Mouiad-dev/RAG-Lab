@@ -132,3 +132,87 @@ class Chunk(models.Model):
     @property
     def is_embedded(self) -> bool:
         return self.vector is not None
+
+
+class JobState(models.TextChoices):
+    """Fine-grained stages of ONE background ingestion run (Producer/Consumer)."""
+
+    QUEUED = "queued", "Queued"
+    EXTRACTING = "extracting", "Extracting"
+    CHUNKING = "chunking", "Chunking"
+    EMBEDDING = "embedding", "Embedding"
+    READY = "ready", "Ready"
+    FAILED = "failed", "Failed"
+
+
+class Job(models.Model):
+    """Durable status record for a background ingestion task.
+
+    The broker (Celery+Redis, Phase 2) *delivers* the work; this row *records* its
+    state so the UI can show live progress and failures survive restarts. Distinct
+    from Document.status (the file's coarse summary) — a doc can be re-ingested with
+    a fresh Job.
+    """
+
+    document = models.ForeignKey(
+        Document, on_delete=models.CASCADE, related_name="jobs"
+    )
+    state = models.CharField(
+        max_length=20,
+        choices=JobState.choices,
+        default=JobState.QUEUED,
+        db_index=True,
+    )
+    progress = models.PositiveSmallIntegerField(default=0)  # 0-100
+    error = models.TextField(blank=True)
+
+    started_at = models.DateTimeField(null=True, blank=True)   # left QUEUED
+    finished_at = models.DateTimeField(null=True, blank=True)  # reached READY/FAILED
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"Job(doc={self.document_id}, state={self.state})"
+
+    # --- fat-model state machine: a job knows how to advance itself ---
+
+    def _advance(self, state: str) -> None:
+        from django.utils import timezone
+
+        self.state = state
+        if self.started_at is None:
+            self.started_at = timezone.now()
+        self.save(update_fields=["state", "started_at", "updated_at"])
+
+    def mark_extracting(self) -> None:
+        self._advance(JobState.EXTRACTING)
+
+    def mark_chunking(self) -> None:
+        self._advance(JobState.CHUNKING)
+
+    def mark_embedding(self) -> None:
+        self._advance(JobState.EMBEDDING)
+
+    def mark_ready(self) -> None:
+        from django.utils import timezone
+
+        self.state = JobState.READY
+        self.progress = 100
+        self.finished_at = timezone.now()
+        self.error = ""
+        self.save(
+            update_fields=["state", "progress", "finished_at", "error", "updated_at"]
+        )
+
+    def mark_failed(self, reason: str) -> None:
+        from django.utils import timezone
+
+        self.state = JobState.FAILED
+        self.finished_at = timezone.now()
+        self.error = reason
+        self.save(
+            update_fields=["state", "finished_at", "error", "updated_at"]
+        )

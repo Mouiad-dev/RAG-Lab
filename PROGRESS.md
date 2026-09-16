@@ -33,7 +33,7 @@
 - [x] **1.1** Enable `pgvector` extension via `documents/0001` migration (`CreateExtension`) — verified `vector` v0.8.6 + `::vector` cast works. Created `documents` app; added `django.contrib.postgres`.
 - [x] **1.2** `Document` model (fat model) + `DocumentRepository` — verified create/read/mark_ready/list against real DB; file on volume
 - [x] **1.3** `Chunk` model (`VectorField` dim 1024) + `ChunkRepository.search_by_vector` (CosineDistance, ORM-native, collection pre-filter) — verified nearest-first ranking on real pgvector
-- [ ] **1.4** `GoldenQuestion`, `Job` (ingest status), `LLMCall` (cost log) models
+- [x] **1.4** `Job` (documents), `GoldenQuestion` (new **evals** app), `LLMCall` **+ `CallCost`** (core) + repositories — verified against real DB. Cost SPLIT out of LLMCall into a 1:1 `CallCost` breakdown (input/output/cache_write/cache_read/total, currency, price_ref); usage stays on LLMCall (incl. cache_creation/cache_read tokens). Price = NO db model (Pydantic config in 1.5). PromptTemplate deferred (Phase 2/4); `prompt_ref` is a string.
 - [ ] **1.5** LLM Port + Adapter (Ollama dev / Anthropic demo / Fake for tests)
 - [ ] **1.6** Embeddings Port + Adapter (BGE-M3 via Ollama)
 
@@ -100,3 +100,19 @@
   search, done ORM-native via pgvector `CosineDistance` annotation + `.order_by("distance")`,
   with a **collection pre-filter** (Notebook/Golden isolation). Migration `0003_chunk`. Verified:
   hand-made 1024-dim vectors ranked A=0.0000 < C=0.0061 < B=1.0000 on real pgvector, then cleaned up.
+- **1.4** — Three "lab memory" tables + repos, split by concern into a new `evals` app:
+  `Job` (documents/models.py) — ingestion state machine (queued→extracting→chunking→embedding→
+  ready/failed) with fat-model transition methods + started/finished timestamps; `JobRepository`.
+  `GoldenQuestion` (evals/) — eval answer key (question, expected_answer, expected_source/page,
+  language); `GoldenQuestionRepository`. `LLMCall` (core/) — immutable cost receipt (provider,
+  model, purpose, prompt_ref string, tokens, cache_read_tokens, `cost_usd` Decimal, latency_ms);
+  `LLMCallRepository.log()` writes LLMCall + CallCost atomically; `total_cost()` aggregates
+  CallCost.total_cost. Migrations: core 0001 (LLMCall+CallCost), documents 0004, evals 0001.
+  **Cost split (user call):** LLMCall = USAGE (tokens/latency), CallCost = MONEY (1:1 breakdown).
+  Option A = every call always gets a CallCost ($0 for Ollama). Cache fully modeled: usage has
+  cache_creation_tokens (write) + cache_read_tokens (read); cost has cache_write_cost +
+  cache_read_cost. Cost field names carry no `_usd` (currency is its own field).
+  **Decisions:** Price = NOT a DB model (static reference data → Pydantic price book in code, 1.5);
+  cost = computed + snapshotted on LLMCall (immutable receipt survives price changes);
+  `LLMResponse` = Pydantic (1.5, Port return type); broker (RabbitMQ/Redis) is transport, `Job` is
+  durable state — complementary, both needed (broker wired Phase 2). Verified all three via shell.

@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from django.db.models import QuerySet
 from pgvector.django import CosineDistance
 
-from .models import Chunk, Document
+from .models import Chunk, Document, Job
 
 
 class DocumentRepository:
@@ -89,3 +89,16 @@ class ChunkRepository:
             .annotate(distance=CosineDistance("vector", query_vector))
             .order_by("distance")[:top_k]
         )
+
+
+class JobRepository:
+    """Read/write access to ingestion Job rows."""
+
+    def create(self, *, document: Document) -> Job:
+        return Job.objects.create(document=document)
+
+    def get(self, job_id: int) -> Job:
+        return Job.objects.get(pk=job_id)
+
+    def latest_for_document(self, document_id: int) -> Job | None:
+        return Job.objects.filter(document_id=document_id).order_by("-created_at").first()

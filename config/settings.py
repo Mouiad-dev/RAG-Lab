@@ -42,8 +42,9 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.postgres",  # provides CreateExtension + Postgres-specific fields
     # Local apps
-    "core",
-    "documents",  # the RAG domain: Document, Chunk, ...
+    "core",       # cross-cutting: health, observability (LLMCall)
+    "documents",  # the RAG domain: Document, Chunk, Job
+    "evals",      # the golden set + eval harness (GoldenQuestion)
 ]
 
 MIDDLEWARE = [

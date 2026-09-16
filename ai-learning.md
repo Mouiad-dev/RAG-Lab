@@ -195,3 +195,42 @@ place (measure first = the one rule).
 we tested *our storage + search logic* with hand-made 1024-dim vectors: A(=query)=0.0000 <
 C(near)=0.0061 < B(orthogonal)=1.0000 — correct nearest-first ranking on REAL pgvector. Real
 embeddings will flow through this identical code path from 1.6 on.
+
+### Step 1.4 — The lab's memory of itself (Job, GoldenQuestion, LLMCall)
+
+Three small tables that hold structured records (not documents), split by concern into apps.
+
+**`Job` vs a message broker (RabbitMQ/Redis) — different layers, both needed.** A broker is a
+*pipe* that delivers a task message to a worker (transport); its messages vanish once consumed. A
+`Job` is a durable Postgres *row* that records status (queued→extracting→chunking→embedding→ready/
+failed) so the UI can show live progress and failures survive a crash. You can't query an in-flight
+broker message for "60% done," and a table can't dispatch work — so: broker moves work, Job records
+truth. Built the model now (Phase 1 = data); the Celery+Redis worker that writes it comes Phase 2.
+Job is a fat-model state machine (transition methods set started_at/finished_at).
+
+**`LLMCall` + the DB-vs-Pydantic rule (the important lesson).**
+- **DB model** = something you persist and query, one row per record/event, unbounded growth
+  (Document, Chunk, Job, LLMCall, GoldenQuestion).
+- **Pydantic model** = a typed object flowing through code in memory — a boundary shape, a config,
+  a validated response (LLMResponse, an Answer, the price book). Not stored as rows.
+- Applied: usage and money are **split** into two DB rows (1:1): `LLMCall` = USAGE (tokens,
+  latency, model, purpose) and `CallCost` = MONEY (a **breakdown**: input/output/cache_write/
+  cache_read/total, currency, `price_ref`). Both written together in one transaction; the dollar
+  amounts are **computed + snapshotted** (Decimal, not float) so historical costs survive price
+  changes. Splitting earns its place only *because* it's a breakdown + price snapshot, not a lone
+  column (a 1:1 for one number would be over-engineering). Option A: every call always gets a
+  CallCost ($0 for Ollama). Cache is modeled on both sides: usage has cache_creation (write) +
+  cache_read tokens; cost has cache_write_cost + cache_read_cost.
+- **Price is NOT a DB model** (user decision + right call): prices are static reference data that
+  live with the code → a Pydantic/dict **price book** (added 1.5), read to *compute* cost. A DB
+  migration to change a price would be wrong.
+- **Cost is not a model at all** — it's a function (tokens × price), result stored on LLMCall.
+- **PromptTemplate** (versioned prompt asset) is a real DB model but deferred to Phase 2/4 when
+  prompts exist; for now `LLMCall.prompt_ref` is a string pointer like `"answer@v1"`.
+
+This sequencing means: the LLM **adapters** (1.5) return a Pydantic `LLMResponse`, compute cost via
+the price book, and write an `LLMCall` receipt — so cost is logged uniformly no matter the backend.
+
+**Verified:** GoldenQuestion saved; Job walked queued→ready (progress 100, both timestamps set);
+two LLMCalls logged each with a CallCost (Ollama $0; Anthropic breakdown 0.0003+0.0009+0.0003=
+0.0015), `total_cost()` aggregated to $0.0015, CASCADE delete removed both rows. All real Postgres.
