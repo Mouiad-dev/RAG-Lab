@@ -9,9 +9,12 @@ their own logic without a real DB.
 
 from __future__ import annotations
 
-from django.db.models import QuerySet
+from collections.abc import Sequence
 
-from .models import Document
+from django.db.models import QuerySet
+from pgvector.django import CosineDistance
+
+from .models import Chunk, Document
 
 
 class DocumentRepository:
@@ -48,3 +51,41 @@ class DocumentRepository:
     def list_in_collection(self, collection: str) -> QuerySet[Document]:
         """All documents in a given collection (newest first via Meta.ordering)."""
         return Document.objects.filter(collection=collection)
+
+
+class ChunkRepository:
+    """All read/write access to Chunk rows — including the ONE place vector search
+    lives (the plan's quarantined pgvector fragment)."""
+
+    def bulk_create(self, chunks: Sequence[Chunk]) -> list[Chunk]:
+        """Save many chunks in one round-trip (ingestion writes in batches)."""
+        return Chunk.objects.bulk_create(list(chunks))
+
+    def list_for_document(self, document_id: int) -> QuerySet[Chunk]:
+        return Chunk.objects.filter(document_id=document_id)
+
+    def search_by_vector(
+        self,
+        query_vector: Sequence[float],
+        collection: str,
+        top_k: int = 5,
+    ) -> list[Chunk]:
+        """🔴 The quarantined vector search — the only place similarity search lives.
+
+        pgvector's cosine-distance operator (`<=>`) has no plain ORM syntax, so we
+        express it via pgvector's `CosineDistance` helper as an annotation. This keeps
+        it ORM-native and parameterized (no raw string / injection risk). Everywhere
+        else in the app stays pure ORM; if search ever changes, only this method does.
+
+        Returns Chunks ordered nearest-first, each carrying a `.distance` attribute
+        (smaller = more similar). We metadata-PRE-filter by collection first (never
+        post-filter) — precision + Notebook/Golden isolation.
+        """
+        return list(
+            Chunk.objects.filter(
+                document__collection=collection,
+                vector__isnull=False,
+            )
+            .annotate(distance=CosineDistance("vector", query_vector))
+            .order_by("distance")[:top_k]
+        )

@@ -164,3 +164,34 @@ model knows how to change *itself*; it doesn't run queries about its siblings.
 `/app/media` volume), `repo.get()` read it back, `mark_ready()` persisted `status=ready`, and
 `list_in_collection("notebook")` returned it — all against real Postgres. Confirmed the row in
 `documents_document` via psql, then cleaned up.
+
+### Step 1.3 — The Chunk model + the quarantined vector search
+
+**What a Chunk is.** A small slice of a document's text (a "sticky-note excerpt") plus its
+embedding vector, linked back to its Document and source `page` (which becomes the citation). We
+can't feed a whole 50-page PDF to the LLM per question (N² attention tax, cost, noise), so we cut
+docs into chunks and search only the few nearest ones.
+
+**Embeddings, plainly.** An embedding is a list of ~1024 numbers encoding *meaning*; similar
+meaning → geometrically close vectors. We embed the question the same way and ask the DB "which
+chunk vectors are closest?" — so "money-back" can match "refund" without sharing words. The
+dimension is FIXED (BGE-M3 = 1024) and must match at index-time and query-time, or distances are
+meaningless. Kept as one constant `EMBEDDING_DIM`; changing embedders => migration + re-embed.
+
+**Storing vectors is clean; searching is the honest part.** The `pgvector` Python lib gives a
+Django `VectorField` (clean ORM to store). But nearest-neighbor search needs pgvector's `<=>`
+cosine operator, which has NO plain ORM syntax. 🔴 So we quarantine it in ONE method,
+`ChunkRepository.search_by_vector`, using pgvector's `CosineDistance("vector", query)` annotation
++ `.order_by("distance")`. This stays ORM-native and parameterized (no raw string, no injection),
+and everywhere else stays pure ORM. The Repository pattern is exactly what makes this containment
+possible. Also: **pre-filter by collection** (never post-filter) for precision + Notebook/Golden
+isolation.
+
+**Deferred deliberately.** The ANN index (HNSW/IVFFlat) that keeps search fast at scale is left as
+a marked NOTE — exact search is fine for a few hundred chunks; add the index when it earns its
+place (measure first = the one rule).
+
+**Verified (allowed test-double, not a forbidden fake).** Real embedder isn't wired until 1.6, so
+we tested *our storage + search logic* with hand-made 1024-dim vectors: A(=query)=0.0000 <
+C(near)=0.0061 < B(orthogonal)=1.0000 — correct nearest-first ranking on REAL pgvector. Real
+embeddings will flow through this identical code path from 1.6 on.

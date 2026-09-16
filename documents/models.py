@@ -10,6 +10,12 @@ DocumentRepository, not here.
 """
 
 from django.db import models
+from pgvector.django import VectorField
+
+# Embedding dimension of our dev embedder (BGE-M3 = 1024). Every chunk vector AND
+# every query vector must share this. Changing embedders => change this + re-embed
+# everything (a migration). Kept as one constant so there's a single source of truth.
+EMBEDDING_DIM = 1024
 
 
 class Collection(models.TextChoices):
@@ -80,3 +86,49 @@ class Document(models.Model):
         self.status = DocumentStatus.FAILED
         self.error = reason
         self.save(update_fields=["status", "error", "updated_at"])
+
+
+class Chunk(models.Model):
+    """One small slice of a document's text + its embedding vector.
+
+    Retrieval searches Chunks (not whole Documents): find the few chunks nearest
+    to the question, show only those to the LLM. `page` becomes the citation.
+    """
+
+    document = models.ForeignKey(
+        Document,
+        on_delete=models.CASCADE,   # delete a doc -> its chunks go too
+        related_name="chunks",
+    )
+
+    text = models.TextField()               # what the LLM actually reads
+    ordinal = models.PositiveIntegerField()  # position within the document (0,1,2,...)
+    page = models.PositiveIntegerField(null=True, blank=True)  # source page (citation)
+    token_count = models.PositiveIntegerField(null=True, blank=True)  # context budgeting
+
+    # The embedding. null until the chunk is embedded (chunks are created first,
+    # embedded second). See EMBEDDING_DIM for the fixed dimension rule.
+    vector = VectorField(dimensions=EMBEDDING_DIM, null=True, blank=True)
+
+    metadata = models.JSONField(default=dict, blank=True)  # heading/section/etc.
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["document_id", "ordinal"]
+        constraints = [
+            # a document can't have two chunks at the same position
+            models.UniqueConstraint(
+                fields=["document", "ordinal"], name="uniq_chunk_doc_ordinal"
+            ),
+        ]
+        # NOTE(scale): add an ANN index (HNSW/IVFFlat) on `vector` in a later step,
+        # once we have enough chunks that exact search is too slow to justify it.
+        # Measure first (the one rule) before adding the index.
+
+    def __str__(self) -> str:
+        return f"Chunk#{self.ordinal} of doc {self.document_id}"
+
+    @property
+    def is_embedded(self) -> bool:
+        return self.vector is not None

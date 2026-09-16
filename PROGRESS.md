@@ -32,7 +32,7 @@
 ### Phase 1 — Data model (ORM) + LLM/Embeddings Ports
 - [x] **1.1** Enable `pgvector` extension via `documents/0001` migration (`CreateExtension`) — verified `vector` v0.8.6 + `::vector` cast works. Created `documents` app; added `django.contrib.postgres`.
 - [x] **1.2** `Document` model (fat model) + `DocumentRepository` — verified create/read/mark_ready/list against real DB; file on volume
-- [ ] **1.3** `Chunk` model with `vector` field + quarantined `search_by_vector` repo method
+- [x] **1.3** `Chunk` model (`VectorField` dim 1024) + `ChunkRepository.search_by_vector` (CosineDistance, ORM-native, collection pre-filter) — verified nearest-first ranking on real pgvector
 - [ ] **1.4** `GoldenQuestion`, `Job` (ingest status), `LLMCall` (cost log) models
 - [ ] **1.5** LLM Port + Adapter (Ollama dev / Anthropic demo / Fake for tests)
 - [ ] **1.6** Embeddings Port + Adapter (BGE-M3 via Ollama)
@@ -92,3 +92,11 @@
 
   **Storage decision:** original file bytes live on a mounted volume (not in the DB, not S3 yet).
   DB holds structured facts + vectors; fat bytes on disk. Swap to S3/MinIO is a Phase-9 config change.
+- **1.3** — Added `pgvector==0.5.0` (rebuilt web image). `Chunk` model: FK→Document
+  (CASCADE, related_name=chunks), text, ordinal, page (citation), token_count, metadata JSON,
+  `vector = VectorField(dimensions=EMBEDDING_DIM=1024, null=True)`, unique(document, ordinal).
+  ANN index (HNSW/IVFFlat) deferred with a NOTE (measure first). `ChunkRepository`:
+  `bulk_create`, `list_for_document`, and 🔴 `search_by_vector` — the ONE quarantined vector
+  search, done ORM-native via pgvector `CosineDistance` annotation + `.order_by("distance")`,
+  with a **collection pre-filter** (Notebook/Golden isolation). Migration `0003_chunk`. Verified:
+  hand-made 1024-dim vectors ranked A=0.0000 < C=0.0061 < B=1.0000 on real pgvector, then cleaned up.
