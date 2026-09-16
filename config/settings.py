@@ -40,8 +40,10 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.postgres",  # provides CreateExtension + Postgres-specific fields
     # Local apps
     "core",
+    "documents",  # the RAG domain: Document, Chunk, ...
 ]
 
 MIDDLEWARE = [

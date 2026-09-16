@@ -103,3 +103,31 @@ Proving the failure path matters — a health check that can't go red is theater
 ---
 
 ## ✅ Phase 0 complete — foundations & the finish line are in place.
+
+---
+
+## Phase 1 — Data model (ORM) + LLM/Embeddings Ports
+
+### Step 1.1 — Teach Postgres what a vector is (enable pgvector)
+
+**Concept.** Postgres knows numbers/text/dates but not "vector" (a list of ~1024 floats that
+encodes *meaning*). The **pgvector** extension adds a `vector` column type plus distance
+operators (`<=>` cosine, `<->` L2, `<#>` inner product) — the machinery of semantic search. The
+image ships the extension *files*, but you must turn it on in the DB with one statement:
+`CREATE EXTENSION IF NOT EXISTS vector;`. Until then, a `vector` column errors with "type vector
+does not exist."
+
+**Why first in Phase 1.** The `Chunk` model (1.3) has a `vector` field that literally cannot be
+created until the extension is on. So this is the true first brick.
+
+**Design pattern.** *Migrations as versioned schema history* — schema is code, applied in order,
+reproducible on any fresh DB (yours, a teammate's, CI's). Django provides a first-class op,
+`django.contrib.postgres.operations.CreateExtension("vector")`, so no raw SQL and it's reversible.
+Note: enabling the extension is NOT the "one quarantined raw fragment" (the `<=>` search) — Django
+has a native operation for it, so we stay ORM-clean here.
+
+**Structure choice.** New `documents` app owns the RAG domain (Document, Chunk, ...), separate
+from `core` (cross-cutting glue like health). Its migration `0001` is *only* the extension, so
+"vector support" is the base all model migrations build on. Kept `models.py` empty — atomic steps.
+
+**Verified:** `pg_extension` shows `vector` v0.8.6; `'[1,2,3]'::vector` casts successfully.

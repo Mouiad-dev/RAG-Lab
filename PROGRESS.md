@@ -30,9 +30,12 @@
 - [x] **0.4** `/health/` endpoint confirming DB + Ollama reachable — **Phase 0 complete**
 
 ### Phase 1 — Data model (ORM) + LLM/Embeddings Ports
-- [ ] Models: `Document`, `Chunk`(vector), `GoldenQuestion`, `Job`, `LLMCall`
-- [ ] LLM Port + Adapter (Ollama dev / Anthropic demo / Fake for tests)
-- [ ] Embeddings Port + Adapter
+- [x] **1.1** Enable `pgvector` extension via `documents/0001` migration (`CreateExtension`) — verified `vector` v0.8.6 + `::vector` cast works. Created `documents` app; added `django.contrib.postgres`.
+- [ ] **1.2** `Document` model (fat model) + first Repository
+- [ ] **1.3** `Chunk` model with `vector` field + quarantined `search_by_vector` repo method
+- [ ] **1.4** `GoldenQuestion`, `Job` (ingest status), `LLMCall` (cost log) models
+- [ ] **1.5** LLM Port + Adapter (Ollama dev / Anthropic demo / Fake for tests)
+- [ ] **1.6** Embeddings Port + Adapter (BGE-M3 via Ollama)
 
 ### Phase 2 — Ingestion + AXIS 1 (8 chunkers) + async queue
 - [ ] Ingestion pipeline (route → extract → chunk → embed → store)
@@ -74,4 +77,8 @@
 - **0.4** — Created `core` app (registered in INSTALLED_APPS). Added thin `health` view:
   checks DB (`SELECT 1`) + Ollama (`/api/version`), returns JSON with per-dependency status,
   **HTTP 200 if all ok else 503**. Wired `path("health/", ...)`. Verified BOTH paths: healthy
-  → 200; forced Ollama failure → 503 with the error surfaced. **Phase 0 done.**
+  → 200; forced Ollama failure → 503 with the error surfaced. **Phase 0 done.** (commit d055198)
+- **1.1** — Created `documents` app; added `django.contrib.postgres` to INSTALLED_APPS. Wrote
+  `documents/0001_enable_pgvector.py` using `CreateExtension("vector")` (ORM-native, reversible,
+  reproducible on any fresh DB). Applied it. Verified in psql: `vector` v0.8.6 in `pg_extension`
+  and `'[1,2,3]'::vector` casts. `documents/models.py` intentionally still empty (models = 1.2+).
