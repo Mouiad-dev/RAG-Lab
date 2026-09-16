@@ -130,6 +130,23 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 
+# Media = user-uploaded files (the original documents).
+# Stored on a mounted volume for now; the DB only keeps the path (see Document.file).
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+# Storage backends. Default = local filesystem (MEDIA_ROOT above).
+# TODO(Phase 9 / deploy): swap "default" to an S3/MinIO backend here — model code
+# (FileField) stays identical; only this setting changes.
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 

@@ -131,3 +131,36 @@ from `core` (cross-cutting glue like health). Its migration `0001` is *only* the
 "vector support" is the base all model migrations build on. Kept `models.py` empty — atomic steps.
 
 **Verified:** `pg_extension` shows `vector` v0.8.6; `'[1,2,3]'::vector` casts successfully.
+
+### Step 1.2 — The Document model + the Repository pattern
+
+**What a Document is.** The "library index card" for one uploaded file: structured *facts about*
+the file (title, collection, content_type, language, page_count, size, status, timestamps) plus a
+pointer to the actual bytes. It is NOT the bytes themselves.
+
+**Where the bytes live (the storage decision).** Three options weighed: (1) in Postgres as
+`bytea` — rejected, it bloats the DB and streams slowly; DBs are for structured data + vectors,
+not fat blobs. (2) Filesystem via a mounted volume — chosen for now: simple, $0, fast; the DB row
+stores only the *path*. (3) S3/MinIO — the production answer, deferred to Phase 9. The clean
+trick: Django's `FileField` + a separate `STORAGES` setting means switching disk→S3 later is a
+*config change, not a code change* (same Port/Adapter spirit as the LLM). Rule: **structured data
++ vectors in Postgres, fat bytes in cheap object storage.**
+
+**The Repository pattern (the "one counter clerk").** Problem: scattering `Document.objects.
+filter(...)` across many files means any query change (or swapping in vector search) forces edits
+everywhere, and tangles business logic with DB details. Fix: put ALL database talking for a domain
+in ONE place — a repository with named methods (`create`, `get`, `list_in_collection`). Everyone
+else asks the repository; nobody touches `Document.objects` directly. Benefits: (a) query changes
+live in one file; (b) 🔴 the ugly-but-necessary raw pgvector `<=>` search gets *quarantined* in
+`ChunkRepository.search_by_vector` (1.3) while everything else stays clean ORM — the repository is
+*why* we can keep the plan's ORM promise; (c) tests can swap a fake repository to check their own
+logic without a real DB. (Repository = writes; "Selector" = reads — kept as one class for now, KISS.)
+
+**Fat model vs thin view.** Behavior about *one* object → a model method (`document.mark_ready()`).
+Talking to the DB about *many* objects → the repository. Coordinating steps → service/view. The
+model knows how to change *itself*; it doesn't run queries about its siblings.
+
+**Verified:** via the container shell, `repo.create(...)` saved a Document (id + file on the
+`/app/media` volume), `repo.get()` read it back, `mark_ready()` persisted `status=ready`, and
+`list_in_collection("notebook")` returned it — all against real Postgres. Confirmed the row in
+`documents_document` via psql, then cleaned up.

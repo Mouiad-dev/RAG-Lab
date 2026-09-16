@@ -12,6 +12,7 @@ venv/
 pgdata/
 ollama_data/
 uploads/
+media/
 *.sqlite3
 
 # Editor / OS noise

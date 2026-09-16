@@ -31,7 +31,7 @@
 
 ### Phase 1 — Data model (ORM) + LLM/Embeddings Ports
 - [x] **1.1** Enable `pgvector` extension via `documents/0001` migration (`CreateExtension`) — verified `vector` v0.8.6 + `::vector` cast works. Created `documents` app; added `django.contrib.postgres`.
-- [ ] **1.2** `Document` model (fat model) + first Repository
+- [x] **1.2** `Document` model (fat model) + `DocumentRepository` — verified create/read/mark_ready/list against real DB; file on volume
 - [ ] **1.3** `Chunk` model with `vector` field + quarantined `search_by_vector` repo method
 - [ ] **1.4** `GoldenQuestion`, `Job` (ingest status), `LLMCall` (cost log) models
 - [ ] **1.5** LLM Port + Adapter (Ollama dev / Anthropic demo / Fake for tests)
@@ -82,3 +82,13 @@
   `documents/0001_enable_pgvector.py` using `CreateExtension("vector")` (ORM-native, reversible,
   reproducible on any fresh DB). Applied it. Verified in psql: `vector` v0.8.6 in `pg_extension`
   and `'[1,2,3]'::vector` casts. `documents/models.py` intentionally still empty (models = 1.2+).
+- **1.2** — `Document` model (title, original_filename, `file` FileField, collection[notebook/
+  golden], content_type, language, page_count, size_bytes, status, error, timestamps) with
+  constraints + indexes in the model, and fat-model methods `mark_processing/ready/failed`.
+  Added `DocumentRepository` (documents/repositories.py) — the only place `Document.objects` is
+  touched (create/get/list_in_collection). File storage: Django `FileField` → `MEDIA_ROOT`
+  volume, `STORAGES` set so S3/MinIO can swap in later (config, not code). Migration `0002_initial`.
+  `media/` gitignored. Verified end-to-end against real Postgres, then cleaned up test row.
+
+  **Storage decision:** original file bytes live on a mounted volume (not in the DB, not S3 yet).
+  DB holds structured facts + vectors; fat bytes on disk. Swap to S3/MinIO is a Phase-9 config change.
