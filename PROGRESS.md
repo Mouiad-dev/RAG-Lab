@@ -26,8 +26,8 @@
 ### Phase 0 — Foundations & the finish line
 - [x] **0.1** Clean slate + write `PRODUCT.md` (numeric targets) + set up `PROGRESS.md` & `ai-learning.md`
 - [x] **0.2** Minimal Django project (`config/` + `manage.py`), pinned deps — `manage.py check` passes
-- [ ] **0.3** `docker-compose.yml`: postgres+pgvector, ollama, web (pinned versions) — `docker compose up` boots
-- [ ] **0.4** `/health/` endpoint confirming DB + Ollama reachable
+- [x] **0.3** `docker-compose.yml`: postgres+pgvector, ollama, web (pinned versions) — `docker compose up` boots
+- [x] **0.4** `/health/` endpoint confirming DB + Ollama reachable — **Phase 0 complete**
 
 ### Phase 1 — Data model (ORM) + LLM/Embeddings Ports
 - [ ] Models: `Document`, `Chunk`(vector), `GoldenQuestion`, `Job`, `LLMCall`
@@ -64,3 +64,14 @@
   `startproject config .` → `config/{settings,urls,wsgi,asgi}.py` + `manage.py`. Annotated
   settings with TODO markers (env secrets → Phase 9; Postgres/pgvector → 0.3/Phase 1). DB is
   SQLite for now so the skeleton boots with no external services. `manage.py check` → 0 issues.
+- **0.3** — `Dockerfile` (python:3.13-slim) + `docker-compose.yml` with 3 pinned services:
+  db=`pgvector/pgvector:pg16`, ollama=`ollama/ollama:0.34.0`, web (built). Named volumes
+  (pgdata, ollama_data), healthchecks, web `depends_on: db healthy`. Switched Django DB to
+  PostgreSQL driven by env vars; set `ALLOWED_HOSTS`; wrote `.env.example`; added
+  `OLLAMA_BASE_URL` to `.env`. Cleanup: removed abandoned v1 orphan container + a pg17-init'd
+  `pgdata` volume that was incompatible with pg16. Verified: `migrate` applied on pg16, and
+  web reached `http://ollama:11434/api/version` → 0.34.0.
+- **0.4** — Created `core` app (registered in INSTALLED_APPS). Added thin `health` view:
+  checks DB (`SELECT 1`) + Ollama (`/api/version`), returns JSON with per-dependency status,
+  **HTTP 200 if all ok else 503**. Wired `path("health/", ...)`. Verified BOTH paths: healthy
+  → 200; forced Ollama failure → 503 with the error surfaced. **Phase 0 done.**

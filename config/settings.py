@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -27,7 +28,7 @@ SECRET_KEY = "django-insecure-=fk6@e6ny-o2+!#ark$#^+$+c+5usa)(t4tq8^+l7sc7l2559*
 # TODO(Phase 9): drive from env (DEBUG=False in prod).
 DEBUG = True
 
-ALLOWED_HOSTS = []  # TODO(0.3): add "web"/localhost when running under docker-compose.
+ALLOWED_HOSTS = ["localhost", "127.0.0.1", "web", "0.0.0.0"]
 
 
 # Application definition
@@ -39,6 +40,8 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # Local apps
+    "core",
 ]
 
 MIDDLEWARE = [
@@ -73,14 +76,18 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
-# TODO(0.3 / Phase 1): switch to PostgreSQL + pgvector, configured from env vars
-# (POSTGRES_HOST/DB/USER/PASSWORD) so the same settings run locally and in docker-compose.
-# SQLite kept for now only so the skeleton boots with zero external services.
+# PostgreSQL, configured from env vars so the SAME settings run on the host and
+# inside docker-compose (compose sets POSTGRES_HOST=db). pgvector extension is
+# enabled via a migration in Phase 1, before the first vector column.
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ.get("POSTGRES_DB", "rag_lab"),
+        "USER": os.environ.get("POSTGRES_USER", "rag"),
+        "PASSWORD": os.environ.get("POSTGRES_PASSWORD", ""),
+        "HOST": os.environ.get("POSTGRES_HOST", "localhost"),
+        "PORT": os.environ.get("POSTGRES_PORT", "5432"),
     }
 }
 

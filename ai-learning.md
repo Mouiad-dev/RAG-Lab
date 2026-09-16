@@ -47,3 +47,59 @@ separate packages added later. Fat models, thin views — enforced by *where* co
 in 0.3/Phase 1; SQLite is a temporary stand-in only so the skeleton boots with zero services.
 
 **Verified:** `python manage.py check` → "System check identified no issues".
+
+### Step 0.3 — The whole dev stack as one system (docker-compose)
+
+**Concept.** `docker compose up` starts several containers as one system with one command.
+We declared three: **db** (`pgvector/pgvector:pg16` — Postgres with the pgvector extension
+baked in, our vector store), **ollama** (local LLM + embeddings, $0, no host install), and
+**web** (the Django app built from our Dockerfile). They share a private network and reach
+each other by *service name*: web → `db:5432`, web → `http://ollama:11434`.
+
+**Why now.** Phase 1 needs a real Postgres+pgvector to store embedding vectors — SQLite can't
+do vector search. The DB must exist before we write models. Proving all three boot and see
+each other is the milestone that says "the system is wired," not just one app.
+
+**Design pattern.** Infrastructure-as-code: the environment is declared, versioned, and
+reproducible. **Every image is pinned** (pg16, ollama 0.34.0, python 3.13-slim) so
+"works on my machine" can't happen. Config comes from env vars (`.env`) so the *same*
+`settings.py` runs on the host and in compose — 12-factor style.
+
+**Two real-world snags fixed (worth remembering):**
+1. A Docker **named volume remembers the Postgres major version** that first initialized it.
+   The old v1 volume was pg17; our pinned pg16 refused to start ("data directory initialized
+   by version 17"). Fix: since it was discardable dev data, remove the volume and let pg16
+   init fresh. Lesson: pin the DB major version *and* don't reuse another version's data dir.
+2. `depends_on` alone only waits for *start*, not *ready*. We add a **healthcheck**
+   (`pg_isready`) and `condition: service_healthy` so web doesn't race a not-yet-accepting DB.
+
+**Verified:** inside `web`, `manage.py migrate` applied on pg16 (real connection), and
+`urlopen('http://ollama:11434/api/version')` → `{"version":"0.34.0"}`.
+
+### Step 0.4 — The health endpoint (first real code path)
+
+**Concept.** One tiny URL, `/health/`, that actively asks "can I reach my dependencies right
+now?" and answers in JSON. It bakes the manual proof from 0.3 (migrate, urlopen) into the app
+so anyone — Docker, CI, a load balancer — can ask "is it alive?" with a single request.
+
+**Why now.** It's the first end-to-end path through Django (URL → view → DB + Ollama → JSON),
+and it closes Phase 0's official done test: "a health check confirms DB + Ollama reachable."
+
+**Design pattern (first taste of §6 layering).** **Thin view**: the view only orchestrates —
+it calls `_check_database()` / `_check_ollama()` helpers and serializes the result; it holds
+no business logic. A deliberately small preview of Controller → Service. Also: correct HTTP
+semantics — **200 only if all deps ok, else 503** — so monitoring tools act on the status code,
+not by parsing a body.
+
+**Gotcha learned.** Django's test `Client` uses host `testserver`, which isn't in
+`ALLOWED_HOSTS`; pass `HTTP_HOST="localhost"` (or add testserver) or you get an HTML 400 instead
+of your JSON.
+
+**Verified BOTH paths (not just the happy one):** healthy → 200
+`{"status":"ok",...}`; Ollama pointed at a dead port → 503
+`{"status":"unhealthy", "checks":{"database":"ok","ollama":"error: ...Connection refused"}}`.
+Proving the failure path matters — a health check that can't go red is theater.
+
+---
+
+## ✅ Phase 0 complete — foundations & the finish line are in place.
