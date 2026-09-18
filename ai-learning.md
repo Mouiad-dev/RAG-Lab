@@ -316,3 +316,34 @@ send an `anthropic-workspace-id` header (supported via `ANTHROPIC_WORKSPACE_ID`)
 **Verified (real charge):** haiku call → 'Paris', 22/4 tokens, and a real receipt of $0.000042
 (22×$1/M input + 4×$5/M output) written by the same decorator. Same code path as Ollama, different
 price. **Phase 1's LLM spine is done.**
+
+### Step 1.6 — The Embeddings Port + the first real semantic search
+
+**Embedder = twin of the LLM Port.** LLM: text → text. Embedder: text → a 1024-number vector
+(fingerprint of meaning). Same `Protocol + Strategy + Factory + registry` shape. `Embedder` declares
+`embed(list)`/`embed_query(one)` + `provider/model/dimensions`. `OllamaEmbedder` calls bge-m3 via
+`/api/embed`.
+
+**BGE-M3:** 1024-dim (= `EMBEDDING_DIM`, so it drops into `Chunk.vector`), multilingual (AR+EN),
+$0 on Ollama. The dimension must match at index and query time — the "same embedder both times" rule.
+
+**DRY win — the generic `ProviderRegistry`.** Instead of copy-pasting the LLM registry, extracted one
+`common/registry.py::ProviderRegistry(Generic[T])` with a lazy `loader`. Both `llm/registry.py` and
+`embeddings/registry.py` are now thin instances of it; the same class will power the chunker,
+retriever, and RAG-architecture registries (Axes 1–3). One engine, many switches.
+
+**When do we adopt a paid embedder?** Eval-gated, not scheduled. BGE-M3 stays default unless an eval
+(earliest Phase 5) shows recall@5 < 0.90; realistic swap point is Phase 9 (demo/deploy). Because of
+the Port, adding a `VoyageEmbedder` later is ~20 min + a config line — never a rewrite. That's the
+payoff of building the interface now.
+
+**Verified — the whole point of RAG, made real:** embedded 3 real sentences (1024-dim each), stored
+them as real `Chunk`s, then queried *"how can I get my money back?"* — nearest hit was the **refund**
+sentence (dist 0.358) despite sharing **no words** with it, well ahead of the vacation/HQ chunks
+(~0.59). Real bge-m3 + real pgvector, no hand-made numbers.
+
+---
+
+## ✅ Phase 1 complete — data models + LLM Port + Embeddings Port. All real tools, no fakes.
+The retrieval foundation is live: real documents/chunks in pgvector, a provider-swappable LLM with
+cost receipts, and a real multilingual embedder producing vectors that search by meaning.

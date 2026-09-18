@@ -37,7 +37,7 @@
 - [x] **1.5a** LLM types + price book: `LLMResponse` (Pydantic), `LLMClient` (typing.Protocol), `ModelPrice`/`PRICE_BOOK`/`compute_cost` (Pydantic, no DB), `FakeLLM` (test-only). Verified cost math + FakeLLM satisfies Protocol.
 - [x] **1.5b** Real `OllamaClient` (httpx → /api/chat) + `MeteredLLMClient` decorator (writes LLMCall+CallCost) + **registry-based** `build_llm_client()` (Protocol + Strategy + Factory + polymorphism, **no if/else**). Pulled `qwen2.5:0.5b`. Verified real call auto-wrote a $0 receipt; unknown provider errors cleanly.
 - [x] **1.5c** `AnthropicClient` (real SDK, `@register_provider("anthropic")`, default `claude-opus-5`, checks stop_reason/timeout, optional workspace-id header). Verified real call (haiku) → 'Paris', real-dollar receipt $0.000042.
-- [ ] **1.6** Embeddings Port + Adapter (BGE-M3 via Ollama)
+- [x] **1.6** Embeddings Port + Adapter (BGE-M3 via Ollama). Generic `common/ProviderRegistry` (DRY, reused by llm+embeddings+future axes). Verified **first real semantic search**: "money back?" → refund chunk (0.358) via real bge-m3 vectors + pgvector. **Phase 1 COMPLETE.**
 
 ### Phase 2 — Ingestion + AXIS 1 (8 chunkers) + async queue
 - [ ] Ingestion pipeline (route → extract → chunk → embed → store)
@@ -148,6 +148,15 @@
   Now each adapter owns its `DEFAULT_MODEL` (ollama qwen2.5:0.5b / anthropic claude-haiku-4-5) and
   the factory reads a **provider-specific** env `{PROVIDER}_MODEL` (computed key, still no branching);
   unset → adapter default. Verified all three resolutions.
+- **1.6** — Extracted generic `common/registry.py::ProviderRegistry` (Generic[T], lazy loader,
+  register/get/names); repointed `llm/registry.py` at it (same public API). New `embeddings/`
+  package mirroring llm/: `ports.py` (`Embedder` Protocol: provider/model/dimensions +
+  embed(list)→list[list] + embed_query), `adapters/ollama.py` (`OllamaEmbedder`, bge-m3, 1024-dim,
+  `@register_embedder("ollama")`, httpx /api/embed batch), `factory.py` (`build_embedder`,
+  EMBEDDING_PROVIDER/{PROVIDER}_EMBEDDING_MODEL). Pulled `bge-m3` (~1.2GB). **Paid embedder =
+  eval-gated** (earliest Phase 5, realistic Phase 9) — only if recall@5 < 0.90; adding one is ~20min
+  via the Port. Verified real semantic search (query shares no words with the matched refund chunk).
+  **PHASE 1 COMPLETE** — data models + LLM Port + Embeddings Port, all real tools, no fakes.
   **Decisions:** Price = NOT a DB model (static reference data → Pydantic price book in code, 1.5);
   cost = computed + snapshotted on LLMCall (immutable receipt survives price changes);
   `LLMResponse` = Pydantic (1.5, Port return type); broker (RabbitMQ/Redis) is transport, `Job` is
