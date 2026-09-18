@@ -234,3 +234,33 @@ the price book, and write an `LLMCall` receipt — so cost is logged uniformly n
 **Verified:** GoldenQuestion saved; Job walked queued→ready (progress 100, both timestamps set);
 two LLMCalls logged each with a CallCost (Ollama $0; Anthropic breakdown 0.0003+0.0009+0.0003=
 0.0015), `total_cost()` aggregated to $0.0015, CASCADE delete removed both rows. All real Postgres.
+
+### Step 1.5a — The LLM boundary: your own type, a Protocol, and the price book
+
+**Two kinds of "model."** `LLMResponse` and `ModelPrice` are **Pydantic** models — typed objects
+in memory, validated, not DB rows. `LLMCall`/`CallCost` are **DB** models — rows you persist.
+Knowing which is which is the core skill here.
+
+**`LLMClient` as a `typing.Protocol` (structural typing).** A Protocol declares the *shape*
+(`provider`, `model`, `complete(...) -> LLMResponse`); any object with that shape *is* an
+LLMClient — no base class, no inheritance. `@runtime_checkable` lets `isinstance(x, LLMClient)`
+check method presence. This is the Port: Ollama, Anthropic, and the test Fake all satisfy it, so
+we swap providers by config. "No vendor type escapes the adapter" — results are mapped into our
+own `LLMResponse` before crossing the boundary, so services/models/views never see anthropic.* or
+Ollama dicts.
+
+**The price book is Pydantic, not a DB table (deliberate).** Prices are static reference data
+that live with the code — git history is the price history, no migration to read them, no DB
+dependency inside a pure calculation. `ModelPrice` IS the "price model" the user asked for; it's
+just in-memory. Promote to a DB table only if runtime-editable prices are ever needed. `compute_cost`
+turns token usage → a `CostBreakdown` (input/output/cache-write/cache-read/total + `price_ref`),
+and we snapshot those dollars onto CallCost so history survives price changes.
+
+**Real 2026 Anthropic rates** (snapshot 2026-06-24, per 1M tokens): Opus 5 $5/$25, Sonnet 5
+$2/$10, Haiku 4.5 $1/$5; cache-write ≈1.25× input, cache-read ≈0.1× input. Ollama = $0.
+
+**Test doubles live in `llm/fakes.py` (TEST-ONLY).** FakeLLM proves *our* logic without spend —
+allowed by the no-fakes rule precisely because it tests our code, not the product.
+
+**Verified:** `isinstance(FakeLLM(), LLMClient)` is True; Haiku 1M in/out/cache-read = $1/$5/$0.10
+= $6.10; Sonnet 1200-in/150-out = $0.0039; Ollama = $0.

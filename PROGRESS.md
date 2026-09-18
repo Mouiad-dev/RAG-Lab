@@ -34,7 +34,9 @@
 - [x] **1.2** `Document` model (fat model) + `DocumentRepository` — verified create/read/mark_ready/list against real DB; file on volume
 - [x] **1.3** `Chunk` model (`VectorField` dim 1024) + `ChunkRepository.search_by_vector` (CosineDistance, ORM-native, collection pre-filter) — verified nearest-first ranking on real pgvector
 - [x] **1.4** `Job` (documents), `GoldenQuestion` (new **evals** app), `LLMCall` **+ `CallCost`** (core) + repositories — verified against real DB. Cost SPLIT out of LLMCall into a 1:1 `CallCost` breakdown (input/output/cache_write/cache_read/total, currency, price_ref); usage stays on LLMCall (incl. cache_creation/cache_read tokens). Price = NO db model (Pydantic config in 1.5). PromptTemplate deferred (Phase 2/4); `prompt_ref` is a string.
-- [ ] **1.5** LLM Port + Adapter (Ollama dev / Anthropic demo / Fake for tests)
+- [x] **1.5a** LLM types + price book: `LLMResponse` (Pydantic), `LLMClient` (typing.Protocol), `ModelPrice`/`PRICE_BOOK`/`compute_cost` (Pydantic, no DB), `FakeLLM` (test-only). Verified cost math + FakeLLM satisfies Protocol.
+- [ ] **1.5b** Real Ollama adapter + `MeteredLLMClient` decorator (writes LLMCall+CallCost) + `build_llm_client()` factory — verify against real Ollama (needs a small model pulled)
+- [ ] **1.5c** Anthropic adapter (real SDK, model default `claude-opus-5`) — verify with the provided key
 - [ ] **1.6** Embeddings Port + Adapter (BGE-M3 via Ollama)
 
 ### Phase 2 — Ingestion + AXIS 1 (8 chunkers) + async queue
@@ -112,6 +114,13 @@
   Option A = every call always gets a CallCost ($0 for Ollama). Cache fully modeled: usage has
   cache_creation_tokens (write) + cache_read_tokens (read); cost has cache_write_cost +
   cache_read_cost. Cost field names carry no `_usd` (currency is its own field).
+- **1.5a** — New `llm/` package (plain Python, not a Django app): `ports.py` (`LLMResponse`
+  Pydantic + `LLMClient` `@runtime_checkable` Protocol — "no vendor type escapes the adapter"),
+  `pricing.py` (`ModelPrice` + `PRICE_BOOK` for Opus5/Sonnet5/Haiku4.5 @ 2026-06-24 rates +
+  `compute_cost` → `CostBreakdown`; Ollama free), `fakes.py` (`FakeLLM`, TEST-ONLY). Added
+  `pydantic==2.12.3`. **Price = Pydantic ModelPrice (not a DB table)** — promote to DB only if
+  runtime editing ever needed. Anthropic key stored in gitignored `.env` (user should rotate it).
+  Verified: FakeLLM isinstance LLMClient; Haiku 1M in/out/cache-read = $1/$5/$0.10 = $6.10; $0 Ollama.
   **Decisions:** Price = NOT a DB model (static reference data → Pydantic price book in code, 1.5);
   cost = computed + snapshotted on LLMCall (immutable receipt survives price changes);
   `LLMResponse` = Pydantic (1.5, Port return type); broker (RabbitMQ/Redis) is transport, `Job` is
