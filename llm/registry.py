@@ -12,9 +12,9 @@ from collections.abc import Callable
 
 from .ports import LLMClient
 
-# provider key -> a callable that builds an LLMClient given a model name.
-# (An adapter class is such a callable: `OllamaClient(model)` returns an instance.)
-Builder = Callable[[str], LLMClient]
+# provider key -> a callable that builds an LLMClient given a model name (or None,
+# in which case the adapter uses its own DEFAULT_MODEL).
+Builder = Callable[[str | None], LLMClient]
 
 _PROVIDERS: dict[str, Builder] = {}
 _loaded = False

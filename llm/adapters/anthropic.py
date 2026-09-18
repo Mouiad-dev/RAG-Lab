@@ -21,7 +21,8 @@ import anthropic
 from ..ports import LLMResponse
 from ..registry import register_provider
 
-DEFAULT_MODEL = "claude-opus-5"
+# TODO: later to change this be controlled by admin
+DEFAULT_MODEL = "claude-haiku-4-5"
 
 
 class TruncatedResponseError(RuntimeError):

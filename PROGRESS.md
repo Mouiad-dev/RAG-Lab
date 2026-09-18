@@ -143,6 +143,11 @@
   workspace"); a workspace-scoped key fixed it. Verified real haiku call → 'Paris', receipt
   $0.000042 (22in×$1/M + 4out×$5/M) via the same MeteredLLMClient. **1.5 COMPLETE.**
   🔐 Both shared keys are in the transcript — user should rotate them.
+- **1.5 fix** — Anthropic default model set to cheapest `claude-haiku-4-5` (user pref). Fixed a
+  model-leak bug: the factory's single global `LLM_MODEL` default (qwen) leaked into all providers.
+  Now each adapter owns its `DEFAULT_MODEL` (ollama qwen2.5:0.5b / anthropic claude-haiku-4-5) and
+  the factory reads a **provider-specific** env `{PROVIDER}_MODEL` (computed key, still no branching);
+  unset → adapter default. Verified all three resolutions.
   **Decisions:** Price = NOT a DB model (static reference data → Pydantic price book in code, 1.5);
   cost = computed + snapshotted on LLMCall (immutable receipt survives price changes);
   `LLMResponse` = Pydantic (1.5, Port return type); broker (RabbitMQ/Redis) is transport, `Job` is

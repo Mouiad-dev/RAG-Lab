@@ -16,14 +16,18 @@ from ..ports import LLMResponse
 from ..registry import register_provider
 
 
+# TODO: later to change this be controlled by admin
+DEFAULT_MODEL = "qwen2.5:0.5b"
+
+
 @register_provider("ollama")
 class OllamaClient:
     """An LLMClient backed by a local Ollama server."""
 
     provider = "ollama"
 
-    def __init__(self, model: str, *, base_url: str | None = None, timeout: float = 60.0):
-        self.model = model
+    def __init__(self, model: str | None = None, *, base_url: str | None = None, timeout: float = 60.0):
+        self.model = model or DEFAULT_MODEL
         self.base_url = (base_url or os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")).rstrip("/")
         self.timeout = timeout
 
