@@ -10,3 +10,9 @@ pgvector==0.5.0         # Django VectorField + distance helpers (CosineDistance)
 
 # --- Step 1.5a: typed LLM boundary ---
 pydantic==2.12.3        # validated LLM I/O (LLMResponse, price book, cost breakdown)
+
+# --- Step 1.5b: real Ollama adapter ---
+httpx==0.28.1           # HTTP client for the Ollama REST API
+
+# --- Step 1.5c: Anthropic (demo LLM) ---
+anthropic==1.6.0        # official Anthropic SDK

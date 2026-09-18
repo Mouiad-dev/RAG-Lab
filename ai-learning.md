@@ -264,3 +264,55 @@ allowed by the no-fakes rule precisely because it tests our code, not the produc
 
 **Verified:** `isinstance(FakeLLM(), LLMClient)` is True; Haiku 1M in/out/cache-read = $1/$5/$0.10
 = $6.10; Sonnet 1200-in/150-out = $0.0039; Ollama = $0.
+
+### Step 1.5b — Real Ollama adapter + the metering Decorator + the Factory
+
+**Adapter (Port/Adapter).** `OllamaClient` makes a real HTTP call (httpx → `/api/chat`,
+`stream=False`) and maps Ollama's response fields (`prompt_eval_count` → input_tokens,
+`eval_count` → output_tokens, `done_reason` → stop_reason) into our `LLMResponse`. No Ollama dict
+escapes the file. Base URL from `OLLAMA_BASE_URL` (works on host and in compose).
+
+**Metering (Decorator pattern).** `MeteredLLMClient` wraps *any* LLMClient: same interface (so it's
+itself an LLMClient), adds one behavior — after the inner call it computes cost via the price book
+and writes the `LLMCall`+`CallCost` receipt — then returns the response. Because logging lives in
+the decorator, not each adapter, "log usage/cost on EVERY call" is enforced in ONE place regardless
+of backend. This is the same shape we'll reuse for a caching decorator later (Phase 6).
+
+**Factory + registry (no if/else — open/closed).** Instead of `if provider == "ollama": ...`, each
+adapter is a **Strategy** that self-registers under a key via `@register_provider("ollama")`. The
+**Factory** (`build_llm_client`) reads `LLM_PROVIDER`/`LLM_MODEL` and does a polymorphic registry
+lookup (`get_provider_builder(provider)`), then wraps the result in metering. Adding a provider =
+write an adapter + one decorator + one import line in `adapters/__init__.py`; the factory itself
+never changes. `_ensure_adapters_loaded()` lazily imports the adapter package on first lookup so the
+registry is always populated regardless of call order (function-level import avoids a circular
+import, since adapters import the registry at their top). This is Protocol + Strategy + Factory +
+polymorphism working together — the "flip a switch" spine.
+
+**Verified (real, no fakes):** `build_llm_client(provider="ollama")` → a real generation ("Paris is
+the capital of France.", 30/8 tokens) and the decorator auto-wrote a $0 `LLMCall`+`CallCost` with
+`price_ref` stamped. First call ~7.5s because Ollama loads the model into memory — warm calls are
+far faster; not a real p95 sample.
+
+### Step 1.5c — The Anthropic adapter (real SDK) + the payoff of the pattern
+
+**One more Strategy, zero factory edits.** `AnthropicClient` is just another
+`@register_provider("anthropic")` adapter — proof the registry design pays off: the factory didn't
+change at all to gain a whole new provider. It flows through the same `MeteredLLMClient`, so an
+Anthropic call writes a **real-dollar** CallCost (unlike Ollama's $0), computed from the price book.
+
+**Step-1 discipline baked in (§5b).** Explicit timeout; **check `stop_reason`** — raise
+`TruncatedResponseError` on `max_tokens` and `RefusalError` on `refusal` (a truncated/refused reply
+is never shipped as if valid). Map the SDK's `usage` (incl. cache tokens) into our `LLMResponse`;
+no `anthropic.types.*` escapes the adapter.
+
+**Modern Claude models reject `temperature`** (Opus 5 / Sonnet 5 etc. → HTTP 400 on sampling
+params). The adapter accepts the `temperature` kwarg (to satisfy the Protocol) but does not forward
+it; determinism is the model default. This is a real 2026 API constraint worth remembering.
+
+**Real-world gotcha:** an **org-scoped** API key returns 400 "not scoped to a workspace" — either
+send an `anthropic-workspace-id` header (supported via `ANTHROPIC_WORKSPACE_ID`) or use a
+**workspace-scoped** key. Failed 400s are not billed.
+
+**Verified (real charge):** haiku call → 'Paris', 22/4 tokens, and a real receipt of $0.000042
+(22×$1/M input + 4×$5/M output) written by the same decorator. Same code path as Ollama, different
+price. **Phase 1's LLM spine is done.**

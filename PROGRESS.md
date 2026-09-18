@@ -35,8 +35,8 @@
 - [x] **1.3** `Chunk` model (`VectorField` dim 1024) + `ChunkRepository.search_by_vector` (CosineDistance, ORM-native, collection pre-filter) — verified nearest-first ranking on real pgvector
 - [x] **1.4** `Job` (documents), `GoldenQuestion` (new **evals** app), `LLMCall` **+ `CallCost`** (core) + repositories — verified against real DB. Cost SPLIT out of LLMCall into a 1:1 `CallCost` breakdown (input/output/cache_write/cache_read/total, currency, price_ref); usage stays on LLMCall (incl. cache_creation/cache_read tokens). Price = NO db model (Pydantic config in 1.5). PromptTemplate deferred (Phase 2/4); `prompt_ref` is a string.
 - [x] **1.5a** LLM types + price book: `LLMResponse` (Pydantic), `LLMClient` (typing.Protocol), `ModelPrice`/`PRICE_BOOK`/`compute_cost` (Pydantic, no DB), `FakeLLM` (test-only). Verified cost math + FakeLLM satisfies Protocol.
-- [ ] **1.5b** Real Ollama adapter + `MeteredLLMClient` decorator (writes LLMCall+CallCost) + `build_llm_client()` factory — verify against real Ollama (needs a small model pulled)
-- [ ] **1.5c** Anthropic adapter (real SDK, model default `claude-opus-5`) — verify with the provided key
+- [x] **1.5b** Real `OllamaClient` (httpx → /api/chat) + `MeteredLLMClient` decorator (writes LLMCall+CallCost) + **registry-based** `build_llm_client()` (Protocol + Strategy + Factory + polymorphism, **no if/else**). Pulled `qwen2.5:0.5b`. Verified real call auto-wrote a $0 receipt; unknown provider errors cleanly.
+- [x] **1.5c** `AnthropicClient` (real SDK, `@register_provider("anthropic")`, default `claude-opus-5`, checks stop_reason/timeout, optional workspace-id header). Verified real call (haiku) → 'Paris', real-dollar receipt $0.000042.
 - [ ] **1.6** Embeddings Port + Adapter (BGE-M3 via Ollama)
 
 ### Phase 2 — Ingestion + AXIS 1 (8 chunkers) + async queue
@@ -121,6 +121,28 @@
   `pydantic==2.12.3`. **Price = Pydantic ModelPrice (not a DB table)** — promote to DB only if
   runtime editing ever needed. Anthropic key stored in gitignored `.env` (user should rotate it).
   Verified: FakeLLM isinstance LLMClient; Haiku 1M in/out/cache-read = $1/$5/$0.10 = $6.10; $0 Ollama.
+- **1.5b** — `llm/adapters/ollama.py` `OllamaClient` (httpx POST /api/chat, stream=False,
+  temperature/num_predict options, maps prompt_eval_count/eval_count/done_reason → LLMResponse,
+  reads OLLAMA_BASE_URL). `llm/metering.py` `MeteredLLMClient` (Decorator: wraps any LLMClient,
+  computes cost via price book, writes LLMCall+CallCost in one place → "log on EVERY call").
+  Added `httpx==0.28.1`; pulled `qwen2.5:0.5b` into the ollama_data volume. Verified a real call
+  end-to-end wrote a $0 receipt with price_ref stamped, then cleaned up. **Note:** first call ~7.5s
+  (model load) — not representative of warm p95.
+  **Refactor (user call): no if/else in the factory.** Added `llm/registry.py` — a provider
+  registry (`@register_provider("ollama")` on `OllamaClient`). `llm/adapters/__init__.py` imports
+  each adapter so it self-registers; registry `_ensure_adapters_loaded()` self-loads on lookup.
+  `build_llm_client()` now does a polymorphic registry lookup (`get_provider_builder`), no branching:
+  Protocol (LLMClient) + Strategy (adapters) + Factory (registry) + polymorphism. Adding a provider
+  = new adapter + one decorator + one import line; the factory never changes (open/closed).
+- **1.5c** — `llm/adapters/anthropic.py` `AnthropicClient` (real `anthropic==1.6.0` SDK,
+  `@register_provider("anthropic")`, default `claude-opus-5`, explicit timeout). Discipline:
+  raises `TruncatedResponseError` on stop_reason=max_tokens and `RefusalError` on refusal (never
+  ship garbage); does NOT forward `temperature` (modern Claude models reject sampling params → 400).
+  Maps usage incl. cache_creation/cache_read tokens → LLMResponse. Optional `ANTHROPIC_WORKSPACE_ID`
+  header for org-scoped keys. **Gotcha:** the first key was org-scoped (400 "not scoped to a
+  workspace"); a workspace-scoped key fixed it. Verified real haiku call → 'Paris', receipt
+  $0.000042 (22in×$1/M + 4out×$5/M) via the same MeteredLLMClient. **1.5 COMPLETE.**
+  🔐 Both shared keys are in the transcript — user should rotate them.
   **Decisions:** Price = NOT a DB model (static reference data → Pydantic price book in code, 1.5);
   cost = computed + snapshotted on LLMCall (immutable receipt survives price changes);
   `LLMResponse` = Pydantic (1.5, Port return type); broker (RabbitMQ/Redis) is transport, `Job` is
