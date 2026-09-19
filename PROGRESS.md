@@ -44,7 +44,9 @@
   behind the `Chunker` Port; Fixed-Size chunker first. Real end-to-end verified.
 - [x] **2.2** Move the SAME pipeline behind Celery + Redis async; `Job` status queryable live
   (producer creates `queued` Job + `.delay()`, worker consumes & advances it). UI comes with the upload view.
-- [ ] **2.3+** Chunkers 2–8 behind the one `Chunker` interface, one at a time, each with a test
+- [x] **2.3** Recursive chunker (#3) behind the `Chunker` interface, hand-built + stdlib unit test.
+  (#2 Sliding Window = Fixed-Size with `overlap>0`, already covered by a param.)
+- [ ] **2.4+** Remaining chunkers (Sentence, Semantic, Document-based, Token-aware, Agentic), one at a time
 - [ ] **2.x** Real PDF/image(OCR) extraction router (bolts onto `extract_text`)
 - [ ] **2.x** Auto-advisor (heuristics)
 
@@ -215,3 +217,22 @@
   until now because the long-running containers held the old value in their env. Fix (non-destructive):
   `ALTER USER rag PASSWORD 'test2026'` to align the volume with `.env`. Lesson: changing `POSTGRES_PASSWORD`
   after first init does nothing; the volume is the source of truth.
+- **Track alignment** — Added `TRACK_MAP.md` cross-referencing RAG-Lab phases ↔ the "AI Engineer Track"
+  learning roadmap, and adopted a per-step cadence (explain step → explain the Track tool → build by hand).
+  🔴 User decision: **hand-build the whole project; adopt/compare real tools (LlamaIndex, instructor, RAGAS,
+  Langfuse, Mem0, …) only in a dedicated pass AFTER the project is finished.** Key correction: RAG-Lab
+  Phase 2 ≠ Track Phase 2 (MCP); the RAG core = Track **Phase 4**.
+- **2.3** — Recursive character chunker (#3), hand-built (Track Rule 01; no framework, no new dep).
+  `chunkers/adapters/recursive.py` `RecursiveCharacterChunker` `@register_chunker("recursive")`: walks a
+  hierarchy of separators (`\n\n`→`\n`→`. `/`؟ `/`! `/`، `→` `→``) — coarsest present first, recursing
+  finer on any piece over `chunk_size`, hard-slicing only a too-long single token; separators kept attached
+  so pieces reconstruct the text; then greedily merges atoms up to `chunk_size` with an overlap tail
+  (guarded so overlap+atom never overflows). Arabic sentence punctuation included (bilingual). Ordinals
+  stay contiguous. `adapters/__init__.py` imports it (self-register). **First unit tests** in
+  `chunkers/tests/test_recursive.py` via **stdlib `unittest`** (pytest deliberately NOT added yet — it's a
+  tool): 7 tests (empty→[], contiguous ordinals, size bound, no mid-word split, prefers paragraph boundary,
+  oversized-token hard-slice reconstructs exactly, overlap keeps size bound) — all green. Verified the
+  **switch**: same text, `fixed_size` cuts `wit|hin`/`acr|oss` mid-word while `recursive` breaks at word
+  boundaries; and a real end-to-end ingest with `strategy="recursive"` embedded+stored chunks
+  (metadata.strategy=recursive), Job `ready`, semantic search returned the refund chunk (0.374). Cleaned up.
+  **Registry now:** `['fixed_size', 'recursive']` — flip via `CHUNKER` env or `build_chunker(strategy=...)`.

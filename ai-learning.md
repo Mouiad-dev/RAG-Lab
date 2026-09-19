@@ -477,3 +477,51 @@ reminder that a cold worker's p95 ≠ warm p95. Warm runs complete `queued→…
 
 **What 2.2 intentionally is NOT:** no retry/backoff or dead-letter tuning yet (Phase 9), no upload HTTP
 view / live-status UI (comes with the web layer), no RabbitMQ (Phase 9 if needed). One proven async slice.
+
+### Step 2.3 — Recursive chunking (respect boundaries, hand-built)
+
+**Concept.** Fixed-Size cuts at a blind character count, so it slices mid-word/mid-sentence
+(`"...money back wit" | "hin thirty days..."`). Recursive chunking cuts at the most **natural boundary
+that still fits** the size limit, walking a *hierarchy of separators* from coarse to fine:
+paragraph `\n\n` → line `\n` → sentence `. `/`؟ `/`! ` → word ` ` → character `` (last resort). Split on
+the coarsest separator present; any piece still over `chunk_size` is split again by the *next* separator
+down (the "recursive" part); a single token longer than the limit is hard-sliced only as a last resort.
+Then adjacent small pieces are **merged back up** toward `chunk_size` with an overlap tail. Arabic
+sentence punctuation is in the list so AR text breaks at real boundaries too (bilingual recall).
+
+**Why this one, and why by hand.** It's the industry workhorse (what LlamaIndex node parsers /
+LangChain's `RecursiveCharacterTextSplitter` do) and the biggest practical jump over the baseline. Per the
+AI Engineer Track's **Rule 01 ("from scratch first")** and the user's decision to **hand-build the entire
+project and only evaluate real frameworks in a final pass**, we implemented it ourselves — no LlamaIndex,
+no new dependency. Even the test uses the **stdlib `unittest`** rather than adding pytest (a tool is a tool).
+
+**Design pattern — the switch, finally exercised.** Recursive is just another **Strategy** behind the same
+`Chunker` Port: one new adapter + `@register_chunker("recursive")` + one import line. The pipeline, factory,
+task, and worker did not change at all. `build_chunker(strategy="recursive")` (or `CHUNKER=recursive`) flips
+it. This is the first time we *prove* the registry pays off with a second real strategy — the whole reason
+the lab exists ("flip a switch, measure the difference").
+
+**Two implementation subtleties worth remembering.** (1) Keep the separator **attached** to each split
+piece so concatenation reconstructs the original text exactly — otherwise merges silently drop
+newlines/spaces. (2) When seeding the next chunk with an overlap tail, **guard** that `tail + next_atom`
+still fits `chunk_size`, or overlap can push a chunk over the limit. Ordinals are assigned from the count
+of kept chunks, so they stay contiguous even if a piece is dropped as empty.
+
+**Testing a pure function (new discipline).** A chunker is text-in/data-out — no DB, no network — so it's
+the ideal first unit test. 7 cases: empty→`[]`, contiguous ordinals, size bound respected, **no mid-word
+split**, **prefers the paragraph boundary**, oversized single token is hard-sliced *and* reconstructs
+exactly, overlap keeps the size bound. This starts the suite the Phase-9 CI eval/merge gate will run.
+
+**Track mapping (so we learn the right tool at the right time).** This step is AI Engineer Track **Phase 4
+— Embeddings & RAG** (NOT Track Phase 2, which is MCP — the two numbering systems differ; see
+`TRACK_MAP.md`). Tools to *learn about* here: LlamaIndex splitters (the framework we defer), and the
+NirDiamant/RAG_Techniques repo + *Hands-On LLMs* book as references for the technique.
+
+**Verified:** all 7 unit tests green; a side-by-side showed `fixed_size` splitting `wit|hin`/`acr|oss`
+while `recursive` broke at word boundaries; and a real end-to-end ingest with `strategy="recursive"`
+embedded + stored the chunks (`metadata.strategy=recursive`), Job `ready`, semantic search returned the
+refund chunk. Registry now: `['fixed_size', 'recursive']`.
+
+**What 2.3 intentionally is NOT:** Sentence/Semantic/Document-based/Token-aware/Agentic chunkers come one
+at a time in 2.4+ (Token-aware is also when `token_count` stops being None — it needs a real tokenizer).
+No framework adopted (deferred to the post-project tool pass).
