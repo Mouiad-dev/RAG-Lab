@@ -148,6 +148,22 @@ STORAGES = {
     },
 }
 
+# Celery — async task queue (Step 2.2)
+# The broker moves work; the durable `Job` row (Postgres) is the source of truth
+# for status. Redis chosen for simplicity + double duty as the Phase-6 cache;
+# revisit RabbitMQ at Phase 9 if broker-level delivery guarantees are needed.
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
+CELERY_TASK_TRACK_STARTED = True          # report a STARTED state, not just pending/done
+CELERY_TASK_TIME_LIMIT = 30 * 60          # 🔴 hard ceiling — a task can't run forever
+# acks_late + reject_on_worker_lost: a task is acknowledged only AFTER it finishes, so a
+# task whose worker dies mid-run is redelivered rather than lost. Safe here because the
+# pipeline's store step is idempotent (clear-then-insert), so a re-run can't duplicate chunks.
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1     # long tasks: don't let one worker hoard the queue
+
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 

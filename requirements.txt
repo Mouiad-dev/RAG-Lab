@@ -16,3 +16,7 @@ httpx==0.28.1           # HTTP client for the Ollama REST API
 
 # --- Step 1.5c: Anthropic (demo LLM) ---
 anthropic==1.6.0        # official Anthropic SDK
+
+# --- Step 2.2: async ingestion (task queue) ---
+celery==5.4.0           # distributed task queue (Producer/Consumer)
+redis==5.2.1            # Redis client — Celery broker + result backend

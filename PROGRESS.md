@@ -42,7 +42,8 @@
 ### Phase 2 — Ingestion + AXIS 1 (8 chunkers) + async queue
 - [x] **2.1** Synchronous ingestion pipeline vertical slice (extract → chunk → embed → store)
   behind the `Chunker` Port; Fixed-Size chunker first. Real end-to-end verified.
-- [ ] **2.2** Move the SAME pipeline behind Celery + Redis async; `Job` status live in UI
+- [x] **2.2** Move the SAME pipeline behind Celery + Redis async; `Job` status queryable live
+  (producer creates `queued` Job + `.delay()`, worker consumes & advances it). UI comes with the upload view.
 - [ ] **2.3+** Chunkers 2–8 behind the one `Chunker` interface, one at a time, each with a test
 - [ ] **2.x** Real PDF/image(OCR) extraction router (bolts onto `extract_text`)
 - [ ] **2.x** Auto-advisor (heuristics)
@@ -60,6 +61,11 @@
 ### Phase 8 — AXIS 3 architectures (CRAG, GraphRAG, Multimodal, Agentic, Text-to-SQL)
 ### Phase 8b — Memory layer (Mem0)
 ### Phase 9 — Production hardening + CI/CD merge gate
+- [ ] **Broker: switch Celery from Redis → RabbitMQ.** Redis was chosen in Phase 2 for simplicity
+  (one container, doubles as our cache) with the durable `Job` row as the reliability backstop.
+  Revisit here: if ingestion needs broker-level delivery guarantees (durable queues, publisher
+  confirms, consumer acks) evaluate RabbitMQ. Celery abstracts the broker, so it's a `broker_url`
+  change + a compose service, not a rewrite. Keep Redis for caching either way.
 ### Phase 10 — MCP server (OAuth 2.1)
 
 ## Change log
@@ -186,3 +192,26 @@
   clash). Unsupported PDF → `UnsupportedContentError`, Document+Job both `failed` with error surfaced.
   Cleaned up test rows. **Pattern payoff:** the generic `ProviderRegistry` powered a whole new axis
   (chunkers) with ~15 lines; the pipeline body is written once and won't change when 2.2 wraps it in Celery.
+- **2.2** — Async ingestion via **Celery + Redis** (Task Queue / Producer-Consumer). New pinned deps
+  `celery==5.4.0` + `redis==5.2.1`. `config/celery.py` (Celery app, `config_from_object` Django settings
+  `CELERY_` namespace, `autodiscover_tasks`); `config/__init__.py` imports `celery_app` so `@shared_task`
+  resolves in the web (producer) process too. `documents/tasks.py` `ingest_document_task` — a THIN
+  `@shared_task` wrapper over the unchanged 2.1 `ingest_document` (zero logic in the task). compose:
+  new `redis` service (`redis:7.4-alpine`, healthcheck `redis-cli ping`) + `worker` service (reuses the
+  web image, `command: celery -A config worker --concurrency=2`); `web` now `depends_on` redis. Settings:
+  broker/result on redis (env-overridable), `task_track_started`, **`task_time_limit=30m`** (🔴 ceiling),
+  **`acks_late` + `reject_on_worker_lost`** (a dead worker's task is redelivered, safe because the store
+  step is idempotent — a redelivery can't duplicate chunks), `prefetch_multiplier=1` (long tasks).
+  Management command is now the **producer**: creates the `queued` Job then `.delay()`s and returns
+  instantly; `--sync` still runs inline for debugging. The worker reuses the queued Job
+  (`latest_for_document`). `.env(.example)` gained `CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND`.
+  Verified REAL async: `ingest_document 7` returned in ~1s with `Job#4 queued` + a task id while the
+  **worker container** (separate process) received it, embedded via ollama, and drove the Job to `ready`
+  (worker log: received → POST /api/embed 200 → succeeded `{'state':'ready'}`); semantic query returned
+  the Refund chunk (0.491). First worker embed was ~23s = cold bge-m3 load in the fresh process; warm runs
+  fly `queued→…→ready` in <100ms. Cleaned up. **No migration.**
+  🔧 **Gotcha fixed:** recreating containers surfaced a Postgres auth mismatch — `POSTGRES_PASSWORD` only
+  applies at volume **init**; the `pgdata` volume had an older password than `.env`'s `test2026`, masked
+  until now because the long-running containers held the old value in their env. Fix (non-destructive):
+  `ALTER USER rag PASSWORD 'test2026'` to align the volume with `.env`. Lesson: changing `POSTGRES_PASSWORD`
+  after first init does nothing; the volume is the source of truth.

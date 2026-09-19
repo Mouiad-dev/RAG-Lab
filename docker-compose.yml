@@ -33,7 +33,18 @@ services:
       timeout: 5s
       retries: 5
 
-  # --- The Django app ---
+  # --- Redis: Celery broker (+ result backend). Also our cache later (Phase 6). ---
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # --- The Django app (also the Celery PRODUCER: enqueues ingestion tasks) ---
   web:
     build: .
     env_file: .env
@@ -44,10 +55,30 @@ services:
     depends_on:
       db:
         condition: service_healthy          # don't start until Postgres is ready
+      redis:
+        condition: service_healthy
       ollama:
         condition: service_started
     environment:
       OLLAMA_BASE_URL: "http://ollama:11434"
+
+  # --- Celery worker (the CONSUMER): same image as web, different command. ---
+  # Runs the ingestion pipeline off the queue so slow work never blocks a request.
+  worker:
+    build: .
+    env_file: .env
+    volumes:
+      - .:/app                              # same live code as web
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      OLLAMA_BASE_URL: "http://ollama:11434"
+    command: celery -A config worker --loglevel=info --concurrency=2
 
 volumes:
   pgdata:

@@ -414,3 +414,66 @@ replaced the chunks cleanly (idempotent, no unique clash). An unsupported PDF dr
 
 **What 2.1 intentionally is NOT:** no Celery/queue (2.2), no chunkers 2–8 (2.3+), no PDF/OCR router,
 no auto-advisor, no upload UI. One small, proven slice — then we add each hard thing on top of a green base.
+
+### Step 2.2 — Move ingestion into the background (Celery + Redis)
+
+**Concept.** A 50 MB PDF can't be ingested inside an HTTP request — the browser would time out and one
+upload would tie up a web worker. So the slow work moves off the request path onto a **task queue**:
+the web process just drops "ingest doc 7" onto a queue and returns instantly; a separate **worker**
+process does the actual pipeline. This is the **Producer–Consumer** pattern, with three roles:
+- **Producer** — the web process (here, the management command). Enqueues a task, returns immediately.
+- **Broker (Redis)** — the pipe that holds task messages until a worker is free. Messages are transient.
+- **Consumer (Celery worker)** — a long-running process that pulls tasks and runs `ingest_document`.
+
+**The `Job` vs broker distinction, now real (callback to 1.4).** The broker *moves* the work
+(transient — gone once consumed); the `Job` Postgres row *records the truth* (durable — survives
+restarts, and is what a UI polls for live progress). You can't ask an in-flight Redis message "how far
+along?"; you ask the `Job`. That's why we built `Job` in Phase 1 and only wired the broker now — they're
+complementary layers, not alternatives.
+
+**Why the pipeline body didn't change (the whole point of splitting 2.1/2.2).** The Celery task is a
+THIN wrapper: `@shared_task` → call the exact `ingest_document` from 2.1. All 2.2 adds is *who calls it
+and from where*. Because 2.1 was already proven correct when called directly, anything that breaks in 2.2
+is queue plumbing, not pipeline logic. Same "a task/tool is a thin adapter over a service, zero business
+logic inside" rule we'll reuse for tool calling in Phase 7.
+
+**Producer creates the Job, not the pipeline.** The command creates `Job(queued)` and returns its id
+*before* enqueuing, so status is queryable the instant the request returns (models the real upload
+handler: create Job → return id to the browser → worker processes). The worker's pipeline reuses that
+Job via `latest_for_document`.
+
+**Design patterns:** Task Queue / Producer–Consumer (core); broker-vs-durable-state (Redis + Job);
+**same-image-different-command** (the `worker` service reuses the web image, just runs `celery … worker`
+instead of `runserver` — infra reuse, one build).
+
+**Reliability knobs worth knowing.** `task_time_limit` = a hard ceiling so a task can't run forever
+(🔴 the same "always bound the loop" discipline as agent `max_turns`). `acks_late` +
+`reject_on_worker_lost` = a task is acknowledged only *after* it finishes, so if a worker dies mid-run
+the task is **redelivered** rather than silently lost. That redelivery is only safe because 2.1's store
+step is **idempotent** (clear-then-insert) — a re-run can't duplicate chunks. The two steps compose:
+2.1's idempotency is what lets 2.2 choose the safer delivery mode. This also partly compensates for
+Redis-as-broker being less durable than RabbitMQ (the Phase-9 upgrade path).
+
+**Why Redis now, RabbitMQ later.** Redis is one small container that *also* becomes our cache in Phase 6,
+so it earns its keep twice; RabbitMQ is the stronger *broker* (durable queues, publisher confirms, acks)
+but it's broker-only and adds AMQP concepts while we're focused on the queue pattern itself. Our durable
+backstop is the `Job` row, so the simpler broker is safe. Because Celery abstracts the broker, switching
+is a `broker_url` change + one compose service — deferred to Phase 9, *if* ingestion reliability demands
+it. (Same "build the interface, defer the heavy tool until it earns its place" discipline as the
+eval-gated paid embedder.)
+
+**Real-world gotcha (Postgres password).** Recreating the containers surfaced an auth failure:
+`POSTGRES_PASSWORD` only sets the password when the data volume is **first initialized** — afterwards
+it's ignored. The `pgdata` volume had been initialized with an older password than `.env`'s current
+`test2026`; the long-running containers had masked the mismatch by holding the old value in their
+environment. Fix was non-destructive: `ALTER USER rag PASSWORD 'test2026'` to align the volume with
+`.env`. Lesson: the **volume**, not the env var, is the source of truth for an already-initialized DB.
+
+**Verified (real, no fakes):** enqueue returned in ~1s with `Job#4 queued` + a task id, while the
+**separate worker container** received the task, embedded via Ollama, and drove the Job to `ready`
+(worker log: `received → POST /api/embed 200 → succeeded {'state':'ready'}`); the semantic query still
+found the Refund chunk. The first worker embed took ~23s (cold bge-m3 load in the fresh process) — a real
+reminder that a cold worker's p95 ≠ warm p95. Warm runs complete `queued→…→ready` in well under a second.
+
+**What 2.2 intentionally is NOT:** no retry/backoff or dead-letter tuning yet (Phase 9), no upload HTTP
+view / live-status UI (comes with the web layer), no RabbitMQ (Phase 9 if needed). One proven async slice.
