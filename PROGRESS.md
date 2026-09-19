@@ -40,10 +40,12 @@
 - [x] **1.6** Embeddings Port + Adapter (BGE-M3 via Ollama). Generic `common/ProviderRegistry` (DRY, reused by llm+embeddings+future axes). Verified **first real semantic search**: "money back?" → refund chunk (0.358) via real bge-m3 vectors + pgvector. **Phase 1 COMPLETE.**
 
 ### Phase 2 — Ingestion + AXIS 1 (8 chunkers) + async queue
-- [ ] Ingestion pipeline (route → extract → chunk → embed → store)
-- [ ] Celery + Redis async ingestion; `Job` status live in UI
-- [ ] 8 chunkers behind one `Chunker` interface (Fixed-Size first)
-- [ ] Auto-advisor (heuristics)
+- [x] **2.1** Synchronous ingestion pipeline vertical slice (extract → chunk → embed → store)
+  behind the `Chunker` Port; Fixed-Size chunker first. Real end-to-end verified.
+- [ ] **2.2** Move the SAME pipeline behind Celery + Redis async; `Job` status live in UI
+- [ ] **2.3+** Chunkers 2–8 behind the one `Chunker` interface, one at a time, each with a test
+- [ ] **2.x** Real PDF/image(OCR) extraction router (bolts onto `extract_text`)
+- [ ] **2.x** Auto-advisor (heuristics)
 
 ### Phase 3 — Retrieval + AXIS 2 upgrades
 - [ ] `naive` then `hybrid` (dense + BM25 + RRF) behind `Retriever` interface + Factory
@@ -161,3 +163,26 @@
   cost = computed + snapshotted on LLMCall (immutable receipt survives price changes);
   `LLMResponse` = Pydantic (1.5, Port return type); broker (RabbitMQ/Redis) is transport, `Job` is
   durable state — complementary, both needed (broker wired Phase 2). Verified all three via shell.
+- **2.1** — First ingestion vertical slice, **synchronous** (Celery deferred to 2.2). New plain-Python
+  `chunkers/` package mirroring `llm/`+`embeddings/`: `ports.py` (`ChunkData` Pydantic boundary type +
+  `Chunker` `@runtime_checkable` Protocol — chunker returns OUR shape, never touches the DB),
+  `registry.py` (a `ProviderRegistry[Chunker]` instance — 3rd reuse of the generic engine),
+  `factory.py` (`build_chunker(strategy=None, **params)`, reads `CHUNKER` env, no if/else),
+  `adapters/fixed_size.py` (`FixedSizeChunker`, `@register_chunker("fixed_size")`, char-based sliding
+  window: `chunk_size`/`overlap`, guards `0<=overlap<chunk_size`, breaks when a window reaches the end
+  so there's no redundant tail chunk; `token_count` left None — no faked tokenizer). `documents/
+  extractors.py` (`extract_text(document)` — text/markdown UTF-8 only; raises `UnsupportedContentError`
+  for PDF/image; the router seam for OCR is a NOTE'd future branch). `documents/pipeline.py`
+  (`ingest_document(document_id, *, chunker=None, embedder=None)` — the Pipeline orchestrator: advances
+  the `Job` state machine extract→chunk→embed→store, depends on the `Chunker`/`Embedder` Ports via
+  factories, store step is `transaction.atomic()` clear-then-insert so re-ingest is idempotent and a
+  crash can't leave half a doc; on any error marks Document+Job failed with the reason and re-raises).
+  Added `ChunkRepository.delete_for_document` (idempotency). `documents/management/commands/
+  ingest_document.py` — CLI driver (`manage.py ingest_document <id>`), stand-in for the async trigger
+  coming in 2.2. **No new deps, no migration.** Verified REAL end-to-end: 5-line policy file →
+  extract → Fixed-Size chunk → real bge-m3 embed → 5 embedded Chunk rows; Job walked queued→…→ready
+  (progress 100, both timestamps). Semantic query "how do I get a reimbursement?" (no shared words) →
+  **Refund** chunk nearest (0.473). Re-ingest with a different config replaced chunks cleanly (no unique
+  clash). Unsupported PDF → `UnsupportedContentError`, Document+Job both `failed` with error surfaced.
+  Cleaned up test rows. **Pattern payoff:** the generic `ProviderRegistry` powered a whole new axis
+  (chunkers) with ~15 lines; the pipeline body is written once and won't change when 2.2 wraps it in Celery.

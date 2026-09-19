@@ -347,3 +347,70 @@ sentence (dist 0.358) despite sharing **no words** with it, well ahead of the va
 ## ✅ Phase 1 complete — data models + LLM Port + Embeddings Port. All real tools, no fakes.
 The retrieval foundation is live: real documents/chunks in pgvector, a provider-swappable LLM with
 cost receipts, and a real multilingual embedder producing vectors that search by meaning.
+
+---
+
+## Phase 2 — Ingestion pipeline + AXIS 1 (chunkers) + async queue
+
+### Step 2.1 — The ingestion assembly line (synchronous vertical slice)
+
+**Concept.** Ingestion is an assembly line that turns a raw file into searchable rows:
+`extract → chunk → embed → store`. Until now we had all the *parts* (Document, Chunk, a real
+embedder, the Job state machine) but nothing that *ran the line*. Step 2.1 builds the whole line and
+runs it **synchronously** (in-process, blocking) on a small file — the point is to prove the stages
+connect and the output is correct *before* adding hard things on top.
+
+**Why synchronous first, when Phase 2's headline is "async"?** Two hard things at once is where bugs
+hide. If you wrap an unproven pipeline in Celery and it breaks, you can't tell whether the *pipeline*
+or the *queue* is wrong. So 2.1 = prove the pipeline when called directly; 2.2 = move the *same
+function* behind Celery+Redis so it runs in the background with live Job updates. **The pipeline body
+doesn't change between them — only who calls it and from where.** That's the whole reason the queue is
+a separate step.
+
+**Design patterns, and why each is here:**
+- **Pipeline** — discrete ordered stages; the orchestrator (`ingest_document`) advances the `Job`
+  state machine *between* stages (`mark_extracting → mark_chunking → mark_embedding → ready/failed`).
+  Those fat-model Job methods, dormant since 1.4, finally do their job. (Progress is coarse now; it
+  becomes *live* and meaningful once async in 2.2.)
+- **Strategy + Port/Adapter** — the `Chunker` is a Protocol (`strategy` + `chunk(text) -> list[ChunkData]`),
+  exactly like `LLMClient`/`Embedder`. The pipeline depends on the *interface*, so flipping the
+  `CHUNKER` env swaps the algorithm with zero pipeline edits. `FixedSizeChunker` is the first strategy.
+- **Factory + the GENERIC `ProviderRegistry`** — the third reuse of `common/registry.py`. `build_chunker`
+  is ~10 lines and contains no `if/else`; adding a chunker = one adapter + one decorator + one import.
+  This is the concrete payoff of extracting the generic registry back in 1.6 — a whole new axis for ~15 lines.
+- **Repository** — all DB access stays in the repos; the pipeline holds orchestration only. The store
+  step is `transaction.atomic()` **clear-then-insert**, which makes re-ingest *idempotent* (the
+  `unique(document, ordinal)` constraint would otherwise clash on a second run) and prevents a crash
+  mid-store from leaving half a document.
+
+**A typed boundary, again (`ChunkData`).** A chunker returns our OWN Pydantic `ChunkData` list, not
+Django `Chunk` rows — the same "no vendor/DB type escapes the boundary" discipline as `LLMResponse`.
+The chunker is pure text-in/data-out and never touches the ORM; the *pipeline* maps `ChunkData → Chunk`
+rows and embeds them. This is what lets a chunker be unit-tested with no database at all.
+
+**Fixed-Size = the honest baseline, deliberately naive.** It slides a fixed-width **character** window
+with an **overlap** (so a sentence straddling a boundary survives in a neighbour). It knows nothing
+about sentences/paragraphs/structure — PLAN_1.md's rule is "never blind fixed-cut," so this is the
+baseline we will *measure and beat* with recursive/semantic/structure-aware chunkers later. Two honesty
+choices: it **breaks when a window already reaches the end** (no redundant near-duplicate tail chunk),
+and `token_count` stays **None** rather than faking a number — a real tokenizer arrives with a later
+chunker (char-length ≠ tokens; presenting an estimate as a count would be a fake).
+
+**The extractor is a seam, not the feature.** 2.1's `extract_text` handles the **text path only**
+(txt/markdown → UTF-8) and raises `UnsupportedContentError` for a PDF/image. That's enough to exercise
+the full four-stage line honestly, and it makes the deferred **router** (text-PDF vs image→OCR) a single
+obvious place to branch later — nothing up or downstream changes when OCR bolts on.
+
+**Failures are recorded, not swallowed.** Any stage error marks BOTH the Document and the Job `failed`
+with the reason, then **re-raises** so the caller/worker sees it. A pipeline that hides failures is as
+useless as a health check that can't go red (0.4's lesson, applied to ingestion).
+
+**Verified (real, no fakes):** a 5-line policy file → extract → Fixed-Size chunk → **real bge-m3**
+embed → 5 embedded `Chunk` rows in pgvector; the Job walked `queued→…→ready` (progress 100, both
+timestamps set). A semantic query *"how do I get a reimbursement?"* — sharing **no words** with the
+text — ranked the **Refund** chunk nearest (0.473). Re-ingesting with a *different* chunk config
+replaced the chunks cleanly (idempotent, no unique clash). An unsupported PDF drove the failure path:
+`UnsupportedContentError`, Document + Job both `failed`, error surfaced. Test rows cleaned up.
+
+**What 2.1 intentionally is NOT:** no Celery/queue (2.2), no chunkers 2–8 (2.3+), no PDF/OCR router,
+no auto-advisor, no upload UI. One small, proven slice — then we add each hard thing on top of a green base.

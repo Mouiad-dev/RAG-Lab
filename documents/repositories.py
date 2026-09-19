@@ -64,6 +64,15 @@ class ChunkRepository:
     def list_for_document(self, document_id: int) -> QuerySet[Chunk]:
         return Chunk.objects.filter(document_id=document_id)
 
+    def delete_for_document(self, document_id: int) -> int:
+        """Remove a document's chunks so it can be re-ingested cleanly.
+
+        The unique(document, ordinal) constraint means a second ingest would
+        collide with the first; clearing first makes ingestion idempotent.
+        """
+        deleted, _ = Chunk.objects.filter(document_id=document_id).delete()
+        return deleted
+
     def search_by_vector(
         self,
         query_vector: Sequence[float],
