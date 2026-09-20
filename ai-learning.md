@@ -525,3 +525,41 @@ refund chunk. Registry now: `['fixed_size', 'recursive']`.
 **What 2.3 intentionally is NOT:** Sentence/Semantic/Document-based/Token-aware/Agentic chunkers come one
 at a time in 2.4+ (Token-aware is also when `token_count` stops being None — it needs a real tokenizer).
 No framework adopted (deferred to the post-project tool pass).
+
+### Step 2.4 — Sentence-Based chunking (the sentence is sacred)
+
+**Concept.** Make the **sentence the atomic unit**: segment the text into sentences first, then pack whole
+sentences into a chunk up to `chunk_size`, never ending mid-sentence. Optional **sentence-level overlap**
+carries a sentence of context across the seam. Complete sentences embed more coherently and read cleanly as
+citations.
+
+**The distinction from Recursive (worth holding).** Recursive uses the sentence as one rung of a
+*size-driven* ladder — it can still end partway through a sentence if that's what fits, and it doesn't
+*know* what a sentence is (it only avoided splitting `Dr. Smith` in the demo because the merge step happened
+to fit). Sentence-Based inverts the priority: the boundary is sacred, size is met by choosing *how many*
+whole sentences. It's also the **prerequisite for Semantic chunking (#5)**, which groups these sentences by
+embedding similarity — so 2.4 unlocks 2.5.
+
+**Segmentation is the hard part (and where we're honest about limits).** Naïve `split(".")` breaks on
+`Dr.`, `e.g.`, `3.14`, section numbers, URLs. Our hand-rolled `split_sentences()` splits on `[.!?؟]`+
+whitespace but **re-joins across false boundaries** using a small guard: known abbreviations, a trailing
+digit (decimals/`1.2`), and single-letter initials. **Bilingual:** Arabic ends with `؟`/`.`/`!` and has *no
+capital letters*, so we rely on punctuation+whitespace, not a "then-Capital" rule. This regex has real gaps
+— documented in the code — and the field tool (**spaCy `.sents` / NLTK punkt / LlamaIndex SentenceSplitter**)
+is the upgrade we reserve for the **post-project tool pass**, per the hand-build-first rule.
+
+**Pattern — the switch, a third time.** New adapter + `@register_chunker("sentence")` + one import; pipeline/
+factory/task/worker untouched. Registry is now `['fixed_size', 'recursive', 'sentence']`. The new pure
+helper (`split_sentences`) is unit-tested on its own — the value of keeping segmentation a pure function.
+
+**Track mapping.** Still **Track Phase 4 (Embeddings & RAG)**. Tools to *learn about* this step: spaCy /
+NLTK punkt (statistical sentence segmentation), LlamaIndex `SentenceSplitter` — all deferred frameworks.
+
+**Verified:** 10 new unit tests (17 total in the chunker suite) all green; three-way side-by-side shows
+`fixed_size` cutting `in 3|0` while `recursive`/`sentence` break clean; a real ingest with
+`strategy="sentence"` produced whole-sentence chunks, embedded + stored, Job `ready`, semantic search found
+the refund chunk.
+
+**What 2.4 intentionally is NOT:** no spaCy/NLTK (post-project), and Semantic (#5, builds on this),
+Document-based (#6), Token-aware (#7, needs a tokenizer → also unblocks real `token_count`), Agentic (#8)
+each remain their own later sub-steps.

@@ -46,7 +46,8 @@
   (producer creates `queued` Job + `.delay()`, worker consumes & advances it). UI comes with the upload view.
 - [x] **2.3** Recursive chunker (#3) behind the `Chunker` interface, hand-built + stdlib unit test.
   (#2 Sliding Window = Fixed-Size with `overlap>0`, already covered by a param.)
-- [ ] **2.4+** Remaining chunkers (Sentence, Semantic, Document-based, Token-aware, Agentic), one at a time
+- [x] **2.4** Sentence-Based chunker (#4) — sentence is the atomic unit; hand-rolled segmenter + unit tests
+- [ ] **2.5+** Remaining chunkers (Semantic, Document-based, Token-aware, Agentic), one at a time
 - [ ] **2.x** Real PDF/image(OCR) extraction router (bolts onto `extract_text`)
 - [ ] **2.x** Auto-advisor (heuristics)
 
@@ -236,3 +237,17 @@
   boundaries; and a real end-to-end ingest with `strategy="recursive"` embedded+stored chunks
   (metadata.strategy=recursive), Job `ready`, semantic search returned the refund chunk (0.374). Cleaned up.
   **Registry now:** `['fixed_size', 'recursive']` — flip via `CHUNKER` env or `build_chunker(strategy=...)`.
+- **2.4** — Sentence-Based chunker (#4), hand-built (no framework, no new dep). `chunkers/adapters/
+  sentence.py`: pure `split_sentences()` (regex on `[.!?؟]`+whitespace with an abbreviation/decimal/
+  initial guard — `Dr.`, `3.14`, `e.g.` don't over-split; Arabic `؟` handled, no capitalization needed) +
+  `SentenceChunker` `@register_chunker("sentence")` that packs WHOLE sentences up to `chunk_size` with
+  `overlap_sentences` (guarded so overlap+sentence never overflows; oversized single sentence hard-sliced).
+  The sentence is the atomic unit → chunks never end mid-sentence (vs recursive, which can). Prerequisite
+  for Semantic chunking (#5). 🔴 **Honest limit noted in code:** the regex segmenter has gaps; the real
+  upgrade (spaCy `.sents` / NLTK punkt / LlamaIndex SentenceSplitter) is a **post-project** tool pass, not
+  mid-build. **10 stdlib `unittest` tests** (`chunkers/tests/test_sentence.py`): segmentation basics,
+  abbreviation/decimal not split, Arabic `؟` splits, whole-sentence chunks, size bound, contiguous ordinals,
+  sentence overlap repeats a sentence across the seam, oversized hard-slice reconstructs. Full chunker suite
+  = **17 tests green**. Verified three-way side-by-side (fixed cuts `in 3|0`; recursive & sentence break
+  clean) + real end-to-end ingest with `strategy="sentence"` (whole-sentence chunks embedded+stored, Job
+  ready, semantic search returned refund). **Registry now:** `['fixed_size', 'recursive', 'sentence']`.
