@@ -49,7 +49,8 @@
 - [x] **2.4** Sentence-Based chunker (#4) — sentence is the atomic unit; hand-rolled segmenter + unit tests
 - [x] **2.5** Semantic chunker (#5) — embed sentences, cut at percentile distance spikes; uses the Embedder
 - [x] **2.6** Document-Based / structure-aware chunker (#6) — split on Markdown headings; heading_path citations
-- [ ] **2.7+** Remaining chunkers (Token-aware, Agentic), one at a time
+- [x] **2.7** Token-Aware chunker (#7) — real bge-m3 tokens (HF tokenizer); real `token_count` at last
+- [ ] **2.8** Agentic chunker (#8) — LLM decides the cuts (last, most expensive)
 - [ ] **2.x** Real PDF/image(OCR) extraction router (bolts onto `extract_text`)
 - [ ] **2.x** Auto-advisor (heuristics)
 
@@ -279,3 +280,18 @@
   doc: 4 sections → 4 chunks each with the right breadcrumb (`['Refund Policy','Timing']` etc.), embedded +
   stored; query "when will my money be returned?" retrieved the **Refund Policy › Timing** section (0.297).
   **Registry now:** `['document', 'fixed_size', 'recursive', 'semantic', 'sentence']`.
+- **2.7** — Token-Aware chunker (#7). 🔴 **User decision:** adopt a REAL tokenizer here (a foundational
+  primitive like pgvector/Ollama/embedder, not a RAG framework) — chose **exact HF bge-m3 tokenizer**.
+  Added lightweight deps `tokenizers==0.20.3` + `huggingface-hub==0.25.2` (NOT transformers/torch).
+  `chunkers/tokenization.py` `HFTokenizer` loads bge-m3's exact `tokenizer.json` via `hf_hub_download` +
+  `Tokenizer.from_file` (content tokens, `add_special_tokens=False`), cached per-process (`lru_cache`) and
+  on disk in a new **`hf_cache` Docker volume** (mounted on web+worker; env `TOKENIZER_MODEL=BAAI/bge-m3`).
+  `chunkers/adapters/token_aware.py` `TokenAwareChunker` `@register_chunker("token")`: pure `window_ids`
+  (fixed token window + overlap, no redundant tail) → decode each window → **real `token_count`** on every
+  chunk (finally not None). Tokenizer injected as a constructor dep; Port signature unchanged. **8 `unittest`
+  tests** (`test_token_aware.py`): pure windowing + chunker via a FakeTokenizer (no download). Chunker suite
+  now **44 green**. Verified the **Arabic tax** on real bge-m3: identical 65 chars → EN 15 tokens vs AR 19
+  (why char windows are dishonest for AR). Real end-to-end ingest with `strategy="token"` populated
+  token_count (12/12/9), token overlap visible, semantic search hit. **Registry now:** `['document',
+  'fixed_size', 'recursive', 'semantic', 'sentence', 'token']`. NOTE: first use downloads tokenizer.json to
+  the volume (needs network once); reproducible thereafter.

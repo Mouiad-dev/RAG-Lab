@@ -50,6 +50,7 @@ services:
     env_file: .env
     volumes:
       - .:/app                              # live code reload during dev
+      - hf_cache:/root/.cache/huggingface   # bge-m3 tokenizer.json, downloaded once
     ports:
       - "8000:8000"
     depends_on:
@@ -69,6 +70,7 @@ services:
     env_file: .env
     volumes:
       - .:/app                              # same live code as web
+      - hf_cache:/root/.cache/huggingface   # shares the tokenizer cache with web
     depends_on:
       db:
         condition: service_healthy
@@ -83,3 +85,4 @@ services:
 volumes:
   pgdata:
   ollama_data:
+  hf_cache:      # HuggingFace cache (bge-m3 tokenizer.json for token-aware chunking)

@@ -635,3 +635,42 @@ section — the breadcrumb doubling as a citation.
 **What 2.6 intentionally is NOT:** Token-aware (#7, needs a real tokenizer → unblocks real `token_count`)
 and Agentic (#8, LLM decides the cuts) remain later sub-steps; real PDF heading *extraction* is the deferred
 OCR router + post-project tool pass.
+
+### Step 2.7 — Token-Aware chunking (respect the model's real token budget)
+
+**Concept.** Every prior chunker measured **characters**; this one measures **real tokens**. Characters ≠
+tokens, and the gap is language-dependent: Arabic costs ~3× the tokens per character vs English (the
+"Arabic tax"). A char-sized chunk can silently blow a token budget on AR text. Token-Aware slides a window
+of `chunk_tokens` real tokens (with token overlap) so a chunk fits the embedder/LLM limit on *both*
+languages. It's also the step where `ChunkData.token_count` finally holds a **real** number.
+
+**The rule tension it forced — and the resolution.** A token-aware chunker is only meaningful with a REAL
+tokenizer; a `chars÷4` approximation would be a *fake* (the very thing our rules forbid). That collides
+with "hand-build only until the project ends." Resolution (user decision): a tokenizer is a **foundational
+primitive** — the same category as pgvector, Ollama, and the embedder, all of which we adopted because they
+*are* the essence of their step (it's literally Track **Phase 0**). It is *not* a RAG framework like
+LlamaIndex. So we adopt one now. The user chose the **exact bge-m3 tokenizer** (over OpenAI's `tiktoken`
+proxy) so counts match the embedder's real budget.
+
+**How, kept lean and reproducible.** We use the lightweight `tokenizers` runtime (Rust, no torch) +
+`huggingface_hub`, not the heavy `transformers`. `HFTokenizer` fetches bge-m3's exact `tokenizer.json`
+(`hf_hub_download` → `Tokenizer.from_file`), counts CONTENT tokens (`add_special_tokens=False`), is cached
+per process (`lru_cache`) and on disk in a new **`hf_cache` Docker volume** (mounted on web+worker) so it
+downloads once and is reproducible after. This mirrors how Ollama caches its models in a volume.
+
+**Pattern.** Like the semantic chunker's embedder, the tokenizer is an **injected constructor dependency**
+— the `Chunker` Port stays `chunk(text)`. The windowing over the token-id list is a **pure function**
+(`window_ids`), unit-tested with plain integer lists and a `FakeTokenizer` (words-as-tokens), so the test
+suite needs no model download. Registry now `[document, fixed_size, recursive, semantic, sentence, token]`.
+
+**Track mapping.** The tokenizer itself is Track **Phase 0** (tiktoken / HF tokenizers); the chunker is
+Track Phase 4. Learn-about equivalent: LlamaIndex `TokenTextSplitter`.
+
+**Verified:** 8 new tests (44 total, all green); the Arabic tax shown on real bge-m3 (65 chars → 15 EN vs
+19 AR tokens); a real ingest with `strategy="token"` populated `token_count` (12/12/9) with visible token
+overlap, and semantic search still hit. The decode of a mid-text token window can show a subword fragment
+at the edge — the expected token-window tradeoff (same as fixed-size, now in real tokens).
+
+**What 2.7 intentionally is NOT:** Agentic (#8, the LLM chooses the cuts) is the last chunker; and we did
+NOT retrofit token_count onto the other chunkers (it's meaningful when the chunker is token-aware — leaving
+it None elsewhere avoids coupling every ingest to the tokenizer).

@@ -5,3 +5,4 @@ from . import recursive  # noqa: F401
 from . import sentence  # noqa: F401
 from . import semantic  # noqa: F401
 from . import document  # noqa: F401
+from . import token_aware  # noqa: F401
