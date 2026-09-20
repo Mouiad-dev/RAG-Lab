@@ -48,7 +48,8 @@
   (#2 Sliding Window = Fixed-Size with `overlap>0`, already covered by a param.)
 - [x] **2.4** Sentence-Based chunker (#4) — sentence is the atomic unit; hand-rolled segmenter + unit tests
 - [x] **2.5** Semantic chunker (#5) — embed sentences, cut at percentile distance spikes; uses the Embedder
-- [ ] **2.6+** Remaining chunkers (Document-based, Token-aware, Agentic), one at a time
+- [x] **2.6** Document-Based / structure-aware chunker (#6) — split on Markdown headings; heading_path citations
+- [ ] **2.7+** Remaining chunkers (Token-aware, Agentic), one at a time
 - [ ] **2.x** Real PDF/image(OCR) extraction router (bolts onto `extract_text`)
 - [ ] **2.x** Auto-advisor (heuristics)
 
@@ -265,3 +266,16 @@
   REAL end-to-end on a 2-topic doc (refunds vs. the James Webb telescope): the boundary landed **exactly**
   between the topics — 3 refund sentences in chunk 0, 3 telescope sentences in chunk 1 — via real bge-m3, no
   size/punctuation rule. **Registry now:** `['fixed_size', 'recursive', 'sentence', 'semantic']`.
+- **2.6** — Document-Based / structure-aware chunker (#6), hand-built (LlamaIndex `MarkdownNodeParser` /
+  LangChain `MarkdownHeaderTextSplitter` deferred). `chunkers/adapters/document.py`: pure
+  `parse_sections(text)` reads Markdown ATX headings (`^#{1,6} …`), builds sections (heading line + body to
+  next heading) and a **heading_path** breadcrumb via a level stack (preamble → empty path); `DocumentChunker`
+  `@register_chunker("document")` emits one chunk per section with `metadata["heading_path"]` (great
+  citations). **Composition:** an oversized section is delegated to an injected `body_chunker` (default
+  recursive) keeping the heading_path; a doc with **no headings** falls back wholesale (stamped
+  `fallback:recursive`). Port signature unchanged. **9 `unittest` tests** (`test_document.py`): heading
+  detection + nesting, preamble, no-heading fallback, deeper→shallower stack pop, oversized sub-split keeps
+  path, contiguous ordinals. Chunker suite now **36 green**. Verified REAL end-to-end on a Markdown policy
+  doc: 4 sections → 4 chunks each with the right breadcrumb (`['Refund Policy','Timing']` etc.), embedded +
+  stored; query "when will my money be returned?" retrieved the **Refund Policy › Timing** section (0.297).
+  **Registry now:** `['document', 'fixed_size', 'recursive', 'semantic', 'sentence']`.

@@ -603,3 +603,35 @@ sentences in one chunk, three telescope sentences in the next — using real bge
 
 **What 2.5 intentionally is NOT:** Document-based (#6), Token-aware (#7 → unblocks real `token_count`),
 Agentic (#8) remain later; the "is it better?" measurement waits for the Phase-5 evals.
+
+### Step 2.6 — Document-Based chunking (respect the doc's own structure)
+
+**Concept.** Cut on the document's **own structure** — Markdown headings — not size/punctuation/embeddings.
+Each heading (`#`/`##`/`###`) starts a section that stays intact; the **heading path** breadcrumb
+(`Refund Policy › Timing`) rides in `metadata["heading_path"]`, which is a far better citation than a raw
+offset. The plan's "v1 winner" because policies/contracts/manuals are heading-structured and humans cite
+the section.
+
+**Two patterns introduced here.** (1) **Composition** — Document-based delegates oversized sections to an
+injected `body_chunker` (default recursive), so it stays focused on *structure* and reuses proven
+*size*-splitting; the `Chunker` Port signature is unchanged (dependency injected, like the embedder in 2.5).
+(2) **Graceful fallback** — a doc with *no headings* delegates wholesale to the fallback chunker instead of
+emitting one giant chunk. Honest behavior: this strategy shines on structured docs and does the sensible
+thing on plain text.
+
+**The pure core.** `parse_sections(text)` (heading detection + a level-stack that computes the ancestor
+path, popping deeper-or-equal levels on each new heading) is a pure function, unit-tested without embedder or
+DB. Keeping the parser pure is what makes the tricky nesting logic verifiable in isolation.
+
+**Track mapping.** Track **Phase 4**. Learn-about tools: LlamaIndex `MarkdownNodeParser`, LangChain
+`MarkdownHeaderTextSplitter`, and — for extracting structure from real PDFs — Unstructured.io / LlamaParse
+(the "Document AI" senior extension). All deferred. This step also foreshadows the deferred **PDF/OCR
+extraction router**: once we parse PDFs, this same chunker consumes the headings they yield.
+
+**Verified:** 9 new tests (36 total, all green); a real Markdown policy doc produced one chunk per section,
+each carrying the correct heading_path, and a semantic query landed on the exact **Refund Policy › Timing**
+section — the breadcrumb doubling as a citation.
+
+**What 2.6 intentionally is NOT:** Token-aware (#7, needs a real tokenizer → unblocks real `token_count`)
+and Agentic (#8, LLM decides the cuts) remain later sub-steps; real PDF heading *extraction* is the deferred
+OCR router + post-project tool pass.
