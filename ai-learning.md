@@ -563,3 +563,43 @@ the refund chunk.
 **What 2.4 intentionally is NOT:** no spaCy/NLTK (post-project), and Semantic (#5, builds on this),
 Document-based (#6), Token-aware (#7, needs a tokenizer → also unblocks real `token_count`), Agentic (#8)
 each remain their own later sub-steps.
+
+### Step 2.5 — Semantic chunking (cut where the meaning shifts)
+
+**Concept.** Instead of size or punctuation, cut by **meaning**. Embed each sentence, measure the cosine
+distance between neighbours, and place a boundary where the distance **spikes** — a topic change. A chunk
+becomes one coherent topic. Steps: `split_sentences` (reuse 2.4) → embed all (BGE-M3, one batch) →
+adjacent-pair distances → breakpoints where distance exceeds a **percentile** threshold (default 90th,
+data-adaptive so it adjusts per document, not a magic absolute) → group → a `chunk_size` cap splits an
+oversized coherent run.
+
+**The design first: a chunker that needs the embedder.** Every prior chunker was pure text→data. Semantic
+needs vectors to decide boundaries, so `SemanticChunker` takes an `Embedder` as a **constructor dependency**
+(lazy `build_embedder()`), and the `Chunker` Port signature stays `chunk(text)` — the pipeline calls it
+unchanged. Consequence I flagged honestly in code: sentences are **embedded twice** (here for boundaries,
+again in the pipeline's store stage). Reusing them would couple the stages, so it's deferred.
+
+**Keeping a pure, testable core out of a network-bound chunker.** The embedder makes this chunker
+non-deterministic and Ollama-bound, so the decision logic is split into pure functions —
+`cosine_distance` (hand-written dot/norm, no numpy), `_percentile`, and `find_breakpoints(distances, pct)`
+— unit-tested with synthetic distance arrays and a **FakeEmbedder** (a test double is fine *inside a unit
+test*; the no-fakes rule governs the product). The real embedding path is verified end-to-end.
+
+**The honest trade-off — and why it points at Phase 5.** Semantic chunking gives topically-pure chunks, but
+it embeds every sentence *at ingestion* (expensive) and the threshold is finicky and embedder-dependent.
+Whether it actually beats Recursive/Sentence on recall is exactly what the **Phase-5 eval harness** will
+measure — it's the textbook case of "measure, don't assume." It also reinforces the Track's *same-embedder*
+rule: boundaries ride on the very BGE-M3 vectors we later search with.
+
+**Pattern — the switch, a fourth time.** New adapter + `@register_chunker("semantic")` + one import;
+everything else untouched. Registry now `['fixed_size', 'recursive', 'sentence', 'semantic']`.
+
+**Track mapping.** Track **Phase 4**. Learn-about tool: **LlamaIndex `SemanticSplitterNodeParser`** (which
+popularized this percentile-breakpoint method) — deferred to the post-project pass.
+
+**Verified:** 10 new tests (27 total, all green); and a real run on a two-topic document (a refund policy
+followed by James Webb telescope facts) put the boundary **exactly** at the topic shift — three refund
+sentences in one chunk, three telescope sentences in the next — using real bge-m3, no size/punctuation cue.
+
+**What 2.5 intentionally is NOT:** Document-based (#6), Token-aware (#7 → unblocks real `token_count`),
+Agentic (#8) remain later; the "is it better?" measurement waits for the Phase-5 evals.

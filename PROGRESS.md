@@ -47,7 +47,8 @@
 - [x] **2.3** Recursive chunker (#3) behind the `Chunker` interface, hand-built + stdlib unit test.
   (#2 Sliding Window = Fixed-Size with `overlap>0`, already covered by a param.)
 - [x] **2.4** Sentence-Based chunker (#4) — sentence is the atomic unit; hand-rolled segmenter + unit tests
-- [ ] **2.5+** Remaining chunkers (Semantic, Document-based, Token-aware, Agentic), one at a time
+- [x] **2.5** Semantic chunker (#5) — embed sentences, cut at percentile distance spikes; uses the Embedder
+- [ ] **2.6+** Remaining chunkers (Document-based, Token-aware, Agentic), one at a time
 - [ ] **2.x** Real PDF/image(OCR) extraction router (bolts onto `extract_text`)
 - [ ] **2.x** Auto-advisor (heuristics)
 
@@ -251,3 +252,16 @@
   = **17 tests green**. Verified three-way side-by-side (fixed cuts `in 3|0`; recursive & sentence break
   clean) + real end-to-end ingest with `strategy="sentence"` (whole-sentence chunks embedded+stored, Job
   ready, semantic search returned refund). **Registry now:** `['fixed_size', 'recursive', 'sentence']`.
+- **2.5** — Semantic chunker (#5), hand-built (Greg Kamradt / LlamaIndex `SemanticSplitterNodeParser`
+  method; LlamaIndex deferred). `chunkers/adapters/semantic.py`: reuse `split_sentences` → embed each
+  sentence (real BGE-M3, one batch) → `cosine_distance` between adjacent pairs → `find_breakpoints` cuts
+  where distance > a **percentile** threshold (data-adaptive, default 90th) → group; a `chunk_size` cap
+  splits an oversized coherent run (whole sentences). **First chunker that uses the Embedder** — injected as
+  a constructor dep (lazy `build_embedder()`), Port signature `chunk(text)` unchanged. 🔴 Honest notes in
+  code: sentences are **double-embedded** (here for boundaries + again in the pipeline's store stage);
+  "is semantic better?" is a **Phase-5 eval** question. Pure core split out for testing: `cosine_distance`,
+  `_percentile`, `find_breakpoints` (no numpy, no embedder). **10 `unittest` tests** (`test_semantic.py`)
+  using a **FakeEmbedder** (allowed in unit tests) + pure math. Chunker suite now **27 green**. Verified
+  REAL end-to-end on a 2-topic doc (refunds vs. the James Webb telescope): the boundary landed **exactly**
+  between the topics — 3 refund sentences in chunk 0, 3 telescope sentences in chunk 1 — via real bge-m3, no
+  size/punctuation rule. **Registry now:** `['fixed_size', 'recursive', 'sentence', 'semantic']`.
