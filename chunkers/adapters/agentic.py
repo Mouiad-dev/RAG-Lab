@@ -24,7 +24,7 @@ from ..registry import register_chunker
 from .sentence import split_sentences
 
 DEFAULT_CHUNK_SIZE = 1000
-
+# TODO: why not using pydantic to force and validated or instructor framework
 _SYSTEM = (
     "You segment text into topically-coherent chunks. You reply with ONLY JSON."
 )

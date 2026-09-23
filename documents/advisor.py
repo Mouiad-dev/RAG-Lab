@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from chunkers.adapters.sentence import split_sentences
 
 # --- thresholds (named so the heuristic reads like prose) ---
+# TODO make those as configration
 SHORT_DOC_CHARS = 400        # below this, one pass of whole sentences is plenty
 LONG_SENTENCE_CHARS = 350    # avg sentence longer than this ⇒ prose without clear breaks
 ARABIC_HEAVY_RATIO = 0.5     # majority-Arabic ⇒ budget the ~3× token tax
