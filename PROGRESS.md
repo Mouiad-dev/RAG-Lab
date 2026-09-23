@@ -52,9 +52,8 @@
 - [x] **2.7** Token-Aware chunker (#7) — real bge-m3 tokens (HF tokenizer); real `token_count` at last
 - [x] **2.8** Agentic chunker (#8) — LLM decides the cuts; structured JSON output + deterministic fallback.
   **All 8 AXIS-1 chunkers done** (Sliding Window folded into Fixed-Size's `overlap` param → 7 registered).
-- [ ] **2.9** Auto-advisor — profile a file, recommend a chunker + reason (transparent heuristics)
-- [ ] **2.x** Real PDF/image(OCR) extraction router (bolts onto `extract_text`)
-- [ ] **2.x** Auto-advisor (heuristics)
+- [x] **2.9** Auto-advisor — profile a file, recommend a chunker + reason (transparent heuristics)
+- [ ] **2.10** Real PDF/image(OCR) extraction router (bolts onto `extract_text`) — Phase 2's last piece
 
 ### Phase 3 — Retrieval + AXIS 2 upgrades
 - [ ] `naive` then `hybrid` (dense + BM25 + RRF) behind `Retriever` interface + Factory
@@ -308,3 +307,15 @@
   with `FakeLLM` (canned JSON + a junk reply to exercise fallback). **10 tests**, suite now **54 green**.
   Verified real qwen2.5:0.5b returned valid JSON breakpoints (no fallback) end-to-end. **All 8 AXIS-1
   chunkers complete;** registry = `['agentic','document','fixed_size','recursive','semantic','sentence','token']`.
+- **2.9** — Auto-advisor (Advisor service, transparent heuristics — explainable + free, no model, no new
+  dep). `documents/advisor.py`: pure `profile_text(text)` → `DocumentProfile` (char_count, sentence_count,
+  avg_sentence_chars, heading_count via `^#{1,6}` regex, arabic_ratio via `[؀-ۿ]`/alpha) and pure
+  `recommend(profile)` → `ChunkingRecommendation{strategy, reason, profile}` with ORDERED heuristics:
+  structured (≥2 headings)→`document`; short (<400 chars)→`sentence`; Arabic-heavy (ratio≥0.5)→`token`;
+  long sentences (avg≥350)→`semantic`; else→`recursive`. Every pick carries a human-readable `reason`;
+  the user can override. `advise(document)` reads the file (lazy extractor import) and recommends. CLI:
+  `manage.py advise_document <id>`. **8 `unittest` tests** (`documents/test_advisor.py`, pure — no DB/LLM).
+  Verified real demo: a Markdown policy→`document` (3 headings), a one-liner→`sentence`, long prose→
+  `recursive`, each with its reason. **62 tests green total** (54 chunkers + 8 advisor); `manage.py check`
+  clean. NOTE: advisor is a recommender only — not yet auto-wired into the pipeline (that + the PDF/OCR
+  router are the remaining Phase-2 pieces).

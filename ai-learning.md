@@ -698,3 +698,34 @@ is pure and unit-tested with a `FakeLLM` (canned JSON, plus a junk reply to prov
 **Verified:** 10 new tests (54 total, all green); real qwen2.5:0.5b returned valid JSON breakpoints
 end-to-end with no fallback. **All 8 AXIS-1 chunkers are now complete** — Sliding Window (#2) was folded
 into Fixed-Size's `overlap` param, so the registry holds 7 strategies covering the 8 techniques.
+
+### Step 2.9 — The auto-advisor (recommend a strategy, explainably)
+
+**Concept.** Now that all 8 chunkers exist, the advisor answers "which one for THIS file?" It profiles cheap
+signals — length, Markdown heading count, average sentence length, Arabic ratio — and maps them to a
+chunker with a **human-readable reason**. It's a recommender, not a decider: the user can override.
+
+**Why heuristics, not a model (deliberately).** The plan says transparent heuristics *first*: they're
+**free and explainable** — you can read exactly why it picked `document` ("3 headings detected"). A model
+advisor would be a black box and cost money on every upload. Later, an eval can validate the advisor's
+picks against measured recall (Phase 5), but the baseline is honest rules. Pattern: **Advisor service**.
+
+**The heuristics (ordered — order is the logic):** structured (≥2 headings) → `document` (keep sections +
+citations); short (<400 chars) → `sentence`; Arabic-heavy (ratio ≥ 0.5) → `token` (respect the ~3× token
+tax we measured in 2.7); long sentences (avg ≥ 350 chars, weak punctuation boundaries) → `semantic`;
+otherwise → `recursive` (the solid default). Each branch emits its own reason string.
+
+**Pattern & testability.** `profile_text` and `recommend` are **pure functions** (no DB, no LLM, no
+network) → the whole heuristic is unit-tested directly; `advise(document)` is a thin wrapper that reads the
+file (lazy extractor import so the module doesn't pull Django models). This connects the RAG-Lab phases:
+the advisor's signals lean on 2.4's `split_sentences` and 2.6's heading detection, and its Arabic branch is
+justified by 2.7's tokenizer finding.
+
+**Track mapping.** Still Track Phase 4. No framework here — the whole point is transparent, hand-built rules.
+
+**Verified:** 8 tests (62 total green); a real demo recommended `document` for a Markdown policy (3
+headings), `sentence` for a one-liner, and `recursive` for long plain prose — each with its reason.
+
+**What 2.9 intentionally is NOT:** the advisor is not yet auto-wired into ingestion (it's a recommender you
+invoke via `manage.py advise_document <id>`); wiring an `--auto` pick and the **PDF/image OCR extraction
+router** are the remaining Phase-2 pieces.
