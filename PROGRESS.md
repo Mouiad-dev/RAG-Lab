@@ -50,7 +50,9 @@
 - [x] **2.5** Semantic chunker (#5) — embed sentences, cut at percentile distance spikes; uses the Embedder
 - [x] **2.6** Document-Based / structure-aware chunker (#6) — split on Markdown headings; heading_path citations
 - [x] **2.7** Token-Aware chunker (#7) — real bge-m3 tokens (HF tokenizer); real `token_count` at last
-- [ ] **2.8** Agentic chunker (#8) — LLM decides the cuts (last, most expensive)
+- [x] **2.8** Agentic chunker (#8) — LLM decides the cuts; structured JSON output + deterministic fallback.
+  **All 8 AXIS-1 chunkers done** (Sliding Window folded into Fixed-Size's `overlap` param → 7 registered).
+- [ ] **2.9** Auto-advisor — profile a file, recommend a chunker + reason (transparent heuristics)
 - [ ] **2.x** Real PDF/image(OCR) extraction router (bolts onto `extract_text`)
 - [ ] **2.x** Auto-advisor (heuristics)
 
@@ -295,3 +297,14 @@
   token_count (12/12/9), token overlap visible, semantic search hit. **Registry now:** `['document',
   'fixed_size', 'recursive', 'semantic', 'sentence', 'token']`. NOTE: first use downloads tokenizer.json to
   the volume (needs network once); reproducible thereafter.
+- **2.8** — Agentic chunker (#8), the last one. Reuses the existing `LLMClient` port (Ollama default — no
+  new tool). `chunkers/adapters/agentic.py`: numbers the sentences, asks the LLM for
+  `{"breakpoints": [...]}` (last-sentence-of-each-group indices), then **validates** (`parse_boundaries`:
+  regex-extract JSON tolerating prose, ints only, in-range 0..n-2, strictly increasing) and groups
+  (`group_by_boundaries`). 🔴 **Structured-output discipline** (previews Phase 4): on any parse/validation
+  failure OR a call error, fall back to a **deterministic** chunker (sentence) — never crash the ingest or
+  ship garbage; `metadata["fallback"]` records which path ran. LLM + fallback are injected deps; Port
+  signature unchanged. Pure core (`parse_boundaries`, `group_by_boundaries`) unit-tested; chunker tested
+  with `FakeLLM` (canned JSON + a junk reply to exercise fallback). **10 tests**, suite now **54 green**.
+  Verified real qwen2.5:0.5b returned valid JSON breakpoints (no fallback) end-to-end. **All 8 AXIS-1
+  chunkers complete;** registry = `['agentic','document','fixed_size','recursive','semantic','sentence','token']`.

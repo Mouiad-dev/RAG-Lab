@@ -674,3 +674,27 @@ at the edge — the expected token-window tradeoff (same as fixed-size, now in r
 **What 2.7 intentionally is NOT:** Agentic (#8, the LLM chooses the cuts) is the last chunker; and we did
 NOT retrofit token_count onto the other chunkers (it's meaningful when the chunker is token-aware — leaving
 it None elsewhere avoids coupling every ingest to the tokenizer).
+
+### Step 2.8 — Agentic chunking (the LLM decides the cuts) + structured-output discipline
+
+**Concept.** The most expensive strategy: number the sentences and let an **LLM** group them by topic,
+returning the boundary indices. Reuses the `LLMClient` port (Ollama default) — no new tool.
+
+**The real lesson is trust, not chunking.** A model (especially a tiny local one) can return prose,
+malformed JSON, or nonsense indices. So the discipline — which we'll reuse for Phase-4 generation — is:
+ask for a strict JSON shape, **parse + validate** it (regex-extract the JSON object tolerating prose,
+ints only, in range `0..n-2`, strictly increasing), and on ANY failure fall back to a **deterministic**
+chunker. Never crash the ingest or ship garbage because the model misbehaved; `metadata["fallback"]`
+records which path ran. This is the same "check the output, self-heal/fallback, never trust raw model
+output" rule as `stop_reason` checks in the LLM adapters.
+
+**Pattern.** LLM and fallback chunker are injected constructor deps; the `Chunker` Port stays `chunk(text)`.
+The non-deterministic call is isolated, and the decision logic (`parse_boundaries`, `group_by_boundaries`)
+is pure and unit-tested with a `FakeLLM` (canned JSON, plus a junk reply to prove the fallback fires).
+
+**Track mapping.** Track Phase 4 conceptually; the structured-output-with-validation idea is Track Phase 1
+(instructor/Pydantic) which we're hand-doing here with json+regex.
+
+**Verified:** 10 new tests (54 total, all green); real qwen2.5:0.5b returned valid JSON breakpoints
+end-to-end with no fallback. **All 8 AXIS-1 chunkers are now complete** — Sliding Window (#2) was folded
+into Fixed-Size's `overlap` param, so the registry holds 7 strategies covering the 8 techniques.
